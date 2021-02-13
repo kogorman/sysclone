@@ -1,0 +1,603 @@
+#!/usr/bin/env bash
+# Restore a drive, or some partitions, from an archive volume
+
+version=$(cat <<<"
+# Last Modified: Fri Feb 12 16:15:19 PST 2021
+" )
+
+#    This file is part of Sysclone.
+#
+#    Sysclone is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 2 of the License, or
+#    (at your option) any later version published by the Free Software
+#    Foundation.
+#
+#    Sysclone is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with Sysclone.  If not, see <https://www.gnu.org/licenses/>.
+
+bar() {
+  echo ================================================================================
+}
+
+set -o errexit
+set -o pipefail
+
+mypath=$(realpath $0)
+myname=${0##*/}
+
+# Handle options.  Ideas taken from
+#     /usr/share/doc/util-linux/examples/getopt-parse.bash
+if getopt -T >/dev/null
+then
+  echo "$myname requires the GNU getopt program from util-linux" >&2
+  exit 1
+fi
+realargs=$(getopt --options 'd:p:hnSTUVv' \
+  --longoptions 'drives:,partitions:,help,dryrun,nosize,nopart,trace,verbose,version'\
+  -- "$@")
+if [ $? -ne 0 ]; then
+  echo 'Terminating...' >&2
+  exit 1
+fi
+eval set -- "$realargs"
+
+nopart=""
+wordy=""
+dryrun=""
+datestamp=""
+trace=""
+nosize=""
+unset drives
+unset driveopts
+unset parts
+useblockdev=true
+
+while true ; do
+  case $1 in
+    -h  | --help)
+      echo "NAME"
+      echo "        $0 - restore a drive from clonem(1) backup"
+      echo
+      echo "SYNOPSIS"
+      echo "        $myname [ -h | --help ]"
+      echo "        $myname [ -V | --VERSION ]"
+      echo "        $myname [OPTIONS] SYSTEM MOUNTPOINT [DRIVENAME]..."
+      echo
+      echo DESCRIPION:
+      echo "        Restores a backup made by clonem(1)"
+      echo
+      echo '        SYSTEM must be the name of a directory, on MOUNTPOINT'
+      echo '            Slashes and dashes are explicitly forbidden.'
+      echo '        MOUNTPOINT must be a path to a directory.  It is called'
+      echo '            MOUNTPOINT for consistency with partclone \(q.v.\).'
+      echo '        DRIVENAME is a comma-separated list.  If present, each'
+      echo '            must be the name of a drive in the backup, optionally"
+      echo '            followed by a colon and an alias to use in the backup."
+      echo '            More drives may be specified in the --drives option."
+      echo "OPTIONS:"
+      echo "  -D | --datestamp=DATE directory name \(needed only if not"
+      echo "             the most recent.\)  It is called DATE"
+      echo "             because clonem subdirectory names are"
+      echo '             datestamps.'
+      echo "  -d | --drives=FROMDRIVE[:DESTDRIVE]..."
+      echo "             Restore these whole drives.  List is comma-"
+      echo "             separated ane may be used multiple times, along"
+      echo "             with any DRIVENAME parameters.  FROMDRIVE is"
+      echo "             the name for the data as it appears in the backup."
+      echo "             DESTDRIVE for each FROMDRIVE is the drive"
+      echo "             drive to receive the data (default is the"
+      echo "             save as FROMDRIVE.  All metadata and partitions"
+      echo "             will be restored."
+      echo "  -p | --partitions=FROMPART[:DESTPART]..."
+      echo "             FROMPART is the drive as indicated in"
+      echo "             the backup.  DESTPART, if present,"
+      echo "             is the drive to receive the data."
+      echo "             The target partition mus already"
+      echo "             exist.  Comma-separated."
+      echo "  -h | --help      prints this message and quits"
+      echo "  -n | --dryrun    Do everything EXCEPT write to destination"
+      echo "                     drives or partitions"
+      echo "  -S | --nosize    Omit size tests on drive copies (risky!)"
+      echo "  -T | --trace     Output a debugging trace of BASH commands."
+      echo "  -v | --verbose   output additional information about processing"
+      echo "                      (very verbose) mostly for debugging"
+      echo "  -V | --version   print the last modified timestamp and quit"
+      echo
+      echo "Required arguments for long options are required for short"
+      echo "options too.  -d and -p are mutually incompatible.  Default"
+      echo "is all drives in the backup to the same drives in the host."
+      echo
+      echo Examples:
+      echo "        $myname mushkin 20201202"
+      echo "        $myname mushkin -d sda:sdc,sdb:sdd"
+      echo "        $myname mushkin -p sda1:sdc1"
+      echo "        $myname --help"
+      echo
+      echo VERSION
+      echo "       " Is, or is based on the one tagged $version
+      exit 0 ;;
+    -D | --datestamp )
+      datestamp=$2
+      shift 2
+      continue
+      ;;
+    -d | --drives )
+      driveopts+=(${2//,/ })    # replace ALL commas with spaces, make it a list
+      shift 2;
+      continue
+      ;;
+    -p | --partitions )
+      parts+=(${2//,/ })    # replace ALL commas with spaces, make it a list
+      shift 2;
+      continue
+      ;;
+    -S | --nosize )
+      nosize=true
+      shift
+      continue
+      ;;
+    -V | --version)
+      echo "$myname version" $version
+      exit 0
+      ;;
+    -n | --dryrun )   dryrun="true"; shift;   continue ;;
+    -T | --trace )    trace="true";  shift;   continue ;;
+    -U | --nopart )   nopart="true"; shift;   continue ;;
+    -v | --verbose)   wordy="true";  shift;   continue ;;
+    --) shift; break ;;
+    *)
+      echo "Internal error in $myname!; argument=$1" >&2
+      exit 1 ;;
+  esac
+done
+
+argct=$#
+if [ $argct -lt 2 ] ; then
+  echo " *** ERROR: $0 requires two or more non-option arguments." >&2
+  exit 1
+fi
+
+system=$1
+bkup=$2
+shift 2
+drives=($@)
+if [ -n "$wordy" ] ; then
+  echo
+  echo After parsing
+  echo "  drives    is ${drives[@]}"
+  echo "  driveopts is ${driveopts[@]}"
+  echo "  parts     is ${parts[@]}"
+fi
+drives+=(${driveopts[@]})
+if [ -n "$wordy" ] ; then
+  echo "After merging"
+  echo "  drives    is ${drives[@]}"
+  echo
+fi
+
+if [ "$system" != "${system#*-}" ] ; then
+  echo " *** ERROR: $system contains a dash"'("-"), which is not allowed' >&2
+  exit 1
+fi
+if [ "$system" != "${system#*/}" ] ; then
+  echo " *** ERROR: $system contains a slash"'("/"), which is not allowed' >&2
+  exit 1
+fi
+if [ ! -d "$bkup/$system" ] ; then
+  echo " *** ERROR: Directory $bkup/$system not found" >&2
+  exit 1
+fi
+
+if [ -z "$datestamp" ] ; then
+  pushd $bkup >/dev/null
+  datestamp=$(ls -F1 $system | fgrep / | tail -1)
+  datestamp=${datestamp%/}
+  popd >/dev/null
+fi
+if [ -z "$datestamp" ] ; then
+  echo " *** ERROR: cannot determine the backup subdirectory -- should be a date stamp" >&2
+  exit 1
+fi
+
+prefix="$bkup/$system/$datestamp/$system-$datestamp-"
+
+if [ "$wordy" != "" ] ; then
+  echo " args are     $@"
+  echo " system is    $system"
+  echo " datestamp is $datestamp"
+  echo " prefix is    $prefix"
+  echo " drive list:  ${drives[@]}"
+  echo " partitions:  ${parts[@]}"
+  echo " wordy is     $wordy"
+  echo " dryrun is    $dryrun"
+  echo " nopart is    $nopart"
+  echo " nosize is    $nosize"
+fi
+
+if [ ${#drives[@]} -gt 0 ] && [ ${#parts[@]} -gt 0 ] ; then
+  echo " *** ERROR: not allowed to have both --drives and --partitions" >&2
+  exit 1
+fi
+
+declare -i errors
+errors=0
+declare -a errormsgs
+errormsgs=()
+
+if [ -n "$trace" ] ; then
+  set -x
+fi
+
+if [ -n "$wordy" ] ; then
+  echo
+  echo "About to make canonical lists"
+fi
+# If partitions are specified
+if [ ${#parts[@]} -gt 0 ] ; then
+  if [ -n "$wordy" ] ; then
+    echo "Doing partitions"
+  fi
+  pl=()
+  for p in ${parts[@]} ; do
+    if [ $p = ${p/:} ] ; then
+      pl+=($p:$p)
+    else
+      pl+=($p)
+    fi
+  done
+  parts=(${pl[@]})
+  if [ -n "$wordy" ] ; then
+    echo parts is now ${parts[@]}
+  fi
+  for pp in ${parts[@]} ; do
+    frompart=${pp%%:*}
+    clone=( $prefix$frompart-*.clone )
+    target=${pp##*:}
+    if [ -b /dev/$clone ] ; then
+      if [ $(lsblk -nd -o TYPE /dev/$clone | grep -E part | wc -l ) -ne 1 ]
+      then
+        echo " *** ERROR: /dev/$clone is not a partition"
+        errors+=1
+        continue
+      else
+        line=$(lsblk --ascii -n o name,mountpoint /dev/$clone)
+        if [ -n "${line#\* }" ] ; then
+          echo " *** ERROR: target is mounted: $line"
+          errors+=1
+          continue
+        fi
+      fi
+    else
+      echo " *** ERROR: '/dev/$clone' is not a block special file"
+      errors+=1
+      continue
+    fi
+    if [ "$frompart" != "${frompart/\*}" ] ; then
+      echo " *** ERROR: there is no clone on file for $frompart"
+      errors+=1
+      continue
+    fi
+    if [ ! -w /dev/$clone ] ; then
+      echo " *** ERROR: cannot write to $clone"
+      errors+=1
+      continue
+    fi
+  done
+else
+  # If drives have been specified, check that they exist
+  # if not, assume all drives in the backup
+  if [ -n "$wordy" ] ; then
+    echo "Doing drives"
+  fi
+  if [ ${#drives[@]} -gt 0 ] ; then
+    echo "  Using drive list"
+    for d in ${drives[@]} ; do
+      fromdrive=${d%%:*}
+      if [ ! -e $prefix$fromdrive-dump.txt ] ; then
+        echo >&2 " *** ERROR: there is no drive dump for $fromdrive"
+        errors+=1
+        continue
+      fi
+    done
+  else
+    echo "  Using all drives"
+    dumps=( $prefix*-dump.txt )
+    if [ ${#dumps[@]} -lt 1 ] ; then
+      echo >&2 " *** ERROR: there are no drive dumps in $system/$datestamp"
+      exit 1
+    fi
+    drives=()
+    for d in ${dumps[@]} ; do
+      d1=${d#$prefix}
+      d2=${d1%-dump.txt}
+      drives+=("$d2:$d2")
+    done
+    if [ -n "$wordy" ] ; then
+      echo "    drives is now ${drives[@]}"
+    fi
+  fi
+
+  # make sure all drives have a destination, if not assume it is the same as the original source
+  # make sure all destinations exist, are empty and are at least as large as the source was
+  if [ -n "$wordy" ] ; then
+    echo "Making drive list canonical"
+    echo "  drives begins as ${drives[@]}"
+  fi
+  dl=()
+  for d in ${drives[@]} ; do
+    if [ "${d/:}" = "$d" ] ; then 
+      di="$d:$d"
+    else
+      di="$d"
+    fi
+    dl+=("$di")
+    if [ -n "$wordy" ] ; then
+      echo "  added $di"
+      echo "    dl is now ${dl[@]}"
+    fi
+
+    fromdrive=${di%%:*}
+    drivealias=${di##*:}
+    if [ -b /dev/$drivealias ] ; then
+      if [ $(lsblk -nd -o TYPE /dev/$drivealias | grep -E disk | wc -l ) -ne 1 ]
+      then
+        echo " *** ERROR: /dev/$drivealias is not a whole drive"
+        errors+=1
+        continue
+      fi
+    else
+      echo " *** ERROR: '/dev/$drivealias' is not a block special file"
+      errors+=1
+      continue
+    fi
+    # For whole-drive copies, require the targets to be empty: no partition table at all.
+    if [ $(lsblk /dev/$drivealias | wc -l) -gt 2 ] ; then
+      echo " *** ERROR: Target drive /dev/$t must be empty -- see "'wipefs(8)' >&2
+      errors+=1
+      continue
+    fi
+    declare -i fromsize
+    declare -i aliassize
+    fromsize=$(cat $prefix$fromdrive-size.txt)
+    aliassize=$(lsblk --bytes --nodeps --noheadings --output SIZE /dev/$drivealias)
+    if [ -z "$nosize" ] && [ $fromsize -gt $aliassize ] ; then
+      echo " *** ERROR: destination drive $drivealias is smaller than source $fromdrive was"
+      echo "            $fromdrive: $fromsize"
+      echo "            $drivealias: $aliassize"
+      errors+=1
+      continue
+    fi
+    if [ -n "$wordy" ] ; then
+      echo "  Checks done"
+      echo "    dl is now ${dl[@]}"
+    fi
+  done
+  drives=(${dl[@]})
+  if [ -n "$wordy" ] ; then
+    echo "  Canonical drive list is now ${drives[@]}"
+    echo
+  fi
+
+  # form the partitions list for whole drives
+  if [ -n "$wordy" ] ; then
+    echo
+    echo "Forming partition list from drive list"
+  fi
+  for d in ${drives[@]} ; do
+    f=${d%:*}
+    t=${d#*:}
+    clones=( $prefix$f*-*.clone )
+    for c in ${clones[@]} ; do
+       n1=${c#$prefix}
+       s=${n1%%-*.clone}
+       d=${s/$f/$t}
+       parts+=("$s:$d")
+     done
+   done
+  if [ -n "$wordy" ] ; then
+    echo parts is finally ${parts[@]}
+  fi
+fi
+cd $bkup/$system
+
+if [ $errors -gt 0 ] ; then
+  if [ $errors -gt 1 ] ; then
+    echo Quitting on accouint of $errors errors
+  else
+    echo Quitting on acocunt of an error
+  fi
+  exit 1
+fi
+echo Doing $0 $system ${drives[@]} $target $datestamp
+echo Drives is ${drives[@]}
+echo Parts is ${parts[@]}
+
+if [ -z "$dryrun" ] ; then
+  echo You have 10 seconds to change your mind
+  for i in 10 9 8 7 6 5 4 3 2 1 ; do
+    echo -n "$i.. "
+    sleep 1
+  done
+else
+  echo No delay because nothing will be altered.
+fi
+echo
+
+if [ -n "$trace" ] ; then
+  set -x
+fi
+
+# First phase is for whole drives
+[ -n "$wordy" ] && echo there are ${#drives[@]} drives in ${drives[@]}
+for ft in ${drives[@]} ; do
+  {
+    fromdrive=${ft%%:*}
+    target=${ft##*:}
+    prefix=$datestamp/$system-$datestamp-$fromdrive
+    echo "drive is $ft and prefix is $prefix"
+    # First restore the initial few sectors that may contain GRUB or GPT or other
+    # stuff outside of any partition or label; we'll overlay labels and partition
+    # tables later
+    if [ -z "$dryrun" ] ; then
+      echo Restoring drive label, partition table
+      {
+        /usr/bin/time -p \
+          dd if=$datestamp/$system-$datestamp-$fromdrive-firstfew.dd of=/dev/$target
+      } 2>&1 | sed --unbuffered "s/^/  > /"
+    else
+      echo Would restore drive label and partition table
+    fi
+
+    aimedat=$target
+    # Second, restore the signatures
+    if [ -z "$dryrun" ] ; then
+      echo Restoring individual .bak files
+      for file in $prefix-*.bak
+      do
+        [ -n "$wordy" ] && echo file is $file
+        filepart=${file/$prefix-}
+        [ -n "$wordy" ] && echo filepart is $filepart
+        offset=${filepart/%.bak}
+        [ -n "$wordy" ] && echo offset is $offset
+        dd bs=1 conv=notrunc of=/dev/$target if=$file seek=$(($offset))
+      done
+    else
+      echo "Would restore individual .bak files"
+    fi
+
+    # In the case of GPTs there's an outside chance the label is bigger than
+    # the firstfew, and we use sfdisk to recreate the whole monster
+    if head -1 ${prefix}-dump.txt | grep --quiet --fixed-strings gpt
+    then
+      if [ -z "$dryrun" ] ; then
+        echo Restoring GPT label with sfdisk, wiping signatures
+        sfdisk --no-reread -w always -W always /dev/$target <$prefix-dump.txt
+        
+        # ensure proper placement of 2nd GPT
+        echo Rebuilding secondary GPT
+        gdisk /dev/$target <<EOF
+r
+d
+w
+y
+EOF
+      else
+        echo Would restore GPT using sfdisk and gdisk
+      fi
+    fi
+    if [ -z "$dryrun" ] ; then
+      if [ -n "$useblockdev" ] ; then
+        udevadm settle
+        if ! blockdev --rereadpt /dev/$target 2>/tmp/$BASHPID-msgs
+        then
+          errors+=1
+          break
+        fi
+        udevadm settle
+        if [ -n "$wordy" ] ; then
+          lsblk /dev/$target
+        fi
+      else
+        udevadm settle
+        if ! partprobe /dev/$target 2>/tmp/$BASHPID-msgs
+        then
+          errors+=1
+          break
+        fi
+        udevadm settle
+        if [ -n "$wordy" ] ; then
+          lsblk /dev/$target
+        fi
+      fi
+    fi
+  } 2>&1 | sed --unbuffered "s/^/   > /"
+done
+
+if [  $errors -gt 0 ] ; then
+  cat /tmp/$BASHPID-msgs
+  exit 1
+fi
+rm -f /tmp/$BASHPID-msgs
+
+[ -n "$wordy" ] && echo parts is $parts
+
+for ft in ${parts[@]} ; do
+  bar
+  fromdrive=${ft%%:*}
+  tdrv=${ft##*:}
+  prefix=$datestamp/$system-$datestamp-$fromdrive
+  input=( $prefix-*.clone )
+  if [ -n "$wordy" ] ; then
+    echo "       ft is $ft"
+    echo "fromdrive is $fromdrive"
+    echo "     tdrv is $tdrv"
+    echo "   prefix is $prefix"
+    echo "    input is $input"
+  fi
+  if [ ${#input[@]} -ne 1 ] ; then
+    echo " *** ERROR: cannot find a unique clone for $input"
+    exit 1
+  fi
+  echo
+  tail=${input#$prefix-}         # remove prefix
+  # Might be giggles-20200614-sdb1-ntfs.clone
+  ptyp=${tail%.clone}            # Remove suffix
+  if [ -n "$wordy" ] ; then
+    echo "     tail is $tail"
+    echo "     ptyp is $ptyp"
+  fi
+  echo
+  echo Processing partition $fromdrive to /dev/$tdrv as $ptyp
+  { time -p {
+    {
+      if [ "$ptyp" = "swap" ] ; then
+        if [ -z "$dryrun" ] ; then
+          mkswap -c --uuid $(cat $input) /dev/$tdrv
+          echo Swap partition created
+        else
+          echo Would create swap partition
+        fi
+      else
+        if [ -z "$dryrun" ] ; then
+          if [ "$ptyp" = "dd" ] ; then
+            op=""
+          else
+            op=" --restore "
+          fi
+          partclone.$ptyp $op --quiet --source $input --overwrite /dev/$tdrv --logfile tmpclone.log 2>&1
+        else
+          echo "Would restore partition /dev/$tdrv from backup clone"
+        fi
+      fi
+    } 2>&1 | sed --unbuffered "s/^/   > /"
+    date >>restore.log
+    cat tmpclone.log >>restore.log
+    echo >>restore.log
+    sync
+    echo sync done
+    } } 2>&1 | sed --unbuffered "s/^/   > /"
+done
+
+if [ -z "$dryrun" ] ; then
+  if [ ${#drives[@]} -gt 0 ] ; then
+    udevadm settle
+    for ft in ${drives[@]} ; do
+      fromdrive=${ft%%:*}
+      target=${ft##*:}
+      blockdev --rereadpt /dev/$target
+    done
+
+    udevadm settle
+    echo The sysrem now contains 
+    lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT | grep -Ev loop
+  fi
+  echo Clone restored
+else
+  echo That is all I do for a dry run.
+fi

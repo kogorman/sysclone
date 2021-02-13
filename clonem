@@ -1,0 +1,866 @@
+#!/usr/bin/env bash
+# Clone a drive, or some partitions, to an archive volume
+
+version=$(cat <<<"
+# Last Modified: Fri Feb 12 16:15:22 PST 2021
+")
+
+#    This file is part of Sysclone.
+#
+#    Sysclone is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 2 of the License, or
+#    (at your option) any later version published by the Free Software
+#    Foundation.
+#
+#    Sysclone is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with Sysclone.  If not, see <https://www.gnu.org/licenses/>.
+
+# Current design ideas:
+# partclone will be used to copy any filesystem of type FAT*, NTFS, or EXT*.
+# Linux swap partitions will not be copied, as it makes more sense to reformat them
+#   on recovery.
+# MSR ("reserved") partitions and BIOS GRUB partitions will be copied by partclone.dd
+# Swap partitions will not be clones, but will be marked for re-creation and
+# reinitialization on restoring a clone set.
+# All other partitions will be copied by type-specific partclone
+#
+# TODO: support unusual label types; currently just MBR and GPT
+# TODO: support check for consistency of logical and physical sector sizes
+# TODO: consider testing only 0x5 partition type; treat the others in accordance with fstype
+
+bar() {
+  echo ===========================================================================
+}
+
+show() {
+  echo $1
+  if [ -z "$nofiles" ] ; then
+    echo $1 >>$bkpref-clone.log
+  fi  
+} 
+
+wordy() {
+  if [ -n "$wordy" ] ; then
+    echo "$1"
+  fi
+}
+  
+recap() {
+  recap+=("$1")
+  show "$1"
+}                                                                                                                    
+  
+logme() {
+  if [ -z "$nofiles" ] ; then
+    echo "$1" >>/root/backup.log
+    echo "$1" >>$bkup/$host/backup.log
+    echo "$1" >>$bkup/backup.log
+  fi
+  recap "$1"
+}
+
+set -o errexit
+set -o pipefail
+
+mypath=$(realpath $0)
+myname=${0##*/}
+
+# Handle options.  Ideas taken from
+#     /usr/share/doc/util-linux/examples/getopt-parse.bash
+if getopt -T >/dev/null
+then
+  echo "$myname requires the GNU getopt program from util-linux" >&2
+  exit 1
+fi
+realargs=$(getopt --options 'Cc::Dd:FfhM:mNnp:TvV' \
+  --longoptions 'noclone,collection::'\
+  --longoptions 'directory,drives:,dryrun,force,help,mountpoints:,mounted:'\
+  --longoptions 'newhost,nometa,partitions:,trace,verbose,version'\
+  -- "$@")
+if [ $? -ne 0 ]; then
+  echo 'Terminating...' >&2
+  exit 1
+fi
+eval set -- "$realargs"
+
+trace=""
+noclone=""
+nofiles=""
+wordy=""
+overwrite="--output"
+dirok=""
+newhost=""
+mountpoints="error"
+nometa=""
+unset date
+unset parts
+unset drives
+unset drveopts
+
+while true
+do
+  case $1 in
+    -C | --noclone )      # prevents creation of clones and dd files
+      noclone=1
+      shift
+      continue
+      ;;
+    -c | --collection )       # add to existing collection, usually a prior date
+      if [ -v "$date" ] ; then
+        echo "repeated option -c or --collection"; exit 1;
+      fi
+      date=$2
+      shift 2
+      continue
+      ;;
+    -D | --directory)         # allow any directory as target
+      dirok=1
+      shift
+      continue
+      ;;
+    -f | --force)
+      overwrite="--overwrite"
+      shift
+      continue
+      ;;
+    -h  | --help )
+      echo "NAME"
+      echo "        $myname - clone a drive to a backup"
+      echo
+      echo "SYNOPSIS"
+      echo "        $myname [ -h | --help ]"
+      echo "        $myname [ -V | --VERSION ]"
+      echo "        $myname [OPTIONS] SYSTEM MOUNTPOINT [DRIVENAME ...]"
+      echo
+      echo "DESCRIPTION"
+      echo '        Top-level script for cloning drives.  It is written to run'
+      echo "        from a "live" disk or  USB stick in the target system, with"
+      echo "        none of the target drives mounted, and also with the target"
+      echo '        for storing the clones IS mounted as MOUNTPOINT.  Some other'
+      echo '        arrangements are also possible.'
+      echo
+      echo '        SYSTEM must be the name of a directory, on MOUNTPOINT, unless'
+      echo '            --newhost is specified. Slashes and dashes are"
+      echo "            explicitly forbidden.'
+      echo '        MOUNTPOINT must be such, not just any directory, and must'
+      echo '            contain a "backup.log" file.'
+      echo '        DRIVENAME is a comma-separated list.  Ordinarily their'
+      echo '            partitions should not be mounted.  See --mountpoints.'
+      echo "            DRIVENAME entries are names of drives (not partitions)"
+      echo "            to which are added the list(s) provided in any --drives"
+      echo "            options."
+      echo
+      echo "        Be aware that some operating systems may leave a filesystem in"
+      echo "        a state that the underlying partclone cannot handle."
+      echo "        Notoriously, Windows and its NTFS filesystems may require a"
+      echo '        "full" shutdown (hold the SHIFT key while clicking), or a'
+      echo "        repair by the Disk Manager."
+      echo
+      echo "OPTIONS:"
+      echo "  -C | --noclone   Makes no actual clone files, just records metadata"
+      echo "                   and reports what else it would do.  Useful to test"
+      echo "                   commands without waiting for them to complete."
+      echo "  -D | --directory Allows use of any directory for MOUNTPOINT, not"
+      echo "                   just mount points."
+      echo "  -b | --collection[=string]"
+      echo "                   Use the string instead of the current date as the"
+      echo "                   subdirectory for this collection.  A subdirectory"
+      echo "                   by this name must already exist and the name should"
+      echo "                   be a date in the form yyyymmdd.  If no argument is"
+      echo "                   given, the last-sorted existing entry will be used."
+      echo "                   Implies --force."
+      echo "  -d | --drives=DRIVE[:ALIAS]..."
+      echo "                   Back up these whole drives.  List is comma-"
+      echo "                   separated ane may be used multiple times, along"
+      echo "                   with any DRIVENAME parameters.  THe optional ALIAS"
+      echo "                   for each DRIVE is the name it will get in the backup"
+      echo "  -f | --force     Overwrite existing files; useful if a first attempt"
+      echo "                   is interrupted"
+      echo "  -h | --help      Prints this message and quits"
+      echo "  -M | --(mountpoints | mounted)=(allow | skip | error)"
+      echo "                   Specify treatment of mounted partitions:"
+      echo "                   Allow (clone) them, skip them, or treat as"
+      echo "                   an error (default)."
+      echo "  -m | --nometa    Output clone files only, no metadata."
+      echo "                   Always in effect when -p is present."
+      echo "  -N | --newhost   SYSTEM is new to this MOUNTPOINT"
+      echo "  -n | --dryrun    Do nothing, but report what would be done."
+      echo "                   Implies --noclone and --nometa."
+      echo "  -p | --partitions=PART[:ALIAS]..."
+      echo "                   Å comma-separated list of partitions to back up."
+      echo "                   This may be used multiple times."
+      echo "                   Incompatible with --drives. Implies --nometa."
+      echo "                   The optional ALIAS for each partition is the"
+      echo "                   name it will get in the backup."
+      echo "  -T | --trace     Output a debugging trace of actual BASH commands"
+      echo "  -v | --verbose   Output extra details to stdout"
+      echo "  -v | --verbose   output additional information about processing"
+      echo "                      (very verbose) mostly for debugging"
+      echo "  -V | --version   Print the last modified timestamp and quit"
+      echo
+      echo "Required arguments to long options are required of short options as"
+      echo "well.  Optional arguments may not be separated from their option by"
+      echo "any space characters."
+      echo
+      echo Examples:
+      echo "      $myname --help"
+      echo ""
+      echo "  Start a new repository and back up /dev/sdc in"
+      echo "    \"/root/images/whatever\"."
+      echo "      mkdir /root/images"
+      echo "      touch /root/images/backup.log"
+      echo "      $myname -D -N whatever /root/images sdc"
+      echo
+      echo "  Make a subsequent backup on any following day:"
+      echo "      $myname -D whatever -dsdc /root/images"
+      echo
+      echo "  Make the same backup to a drive mounted on /mnt/mydrive"
+      echo '  (use -N the first time)'
+      echo "      $myname [-N] whatever --drives=sdc /mnt/mydrive"
+      echo
+      echo VERSION
+      echo " " Is, or is based on the one tagged $version
+      echo
+      echo
+      exit 0
+      ;;
+    -M | --mountpoints | --mounted )
+      case $2 in
+        allow | skip | error)
+          mountpoints=$2
+          ;;
+        *)
+          echo "Error in value of mountpoints: '$2'"
+          exit 1
+          ;;
+      esac
+      shift 2
+      continue
+      ;;
+    -m | --nometa )
+      nometa="true"
+      shift
+      continue
+      ;;
+    -N | --newhost)
+      newhost=1
+      shift
+      continue
+      ;;
+    -d | --drives )
+      driveopts+=(${2//,/ })   # replace ALL commas with spaces, make it a list
+      shift 2
+      continue
+      ;;
+    -p | --partitions )
+      parts+=(${2//,/ })   # replace ALL commas with spaces, make it a list
+      nometa="true"
+      shift 2
+      continue
+      ;;
+    -V | --version)
+      echo "$myname version" $version
+      exit 0
+      ;;
+    '--')
+      shift
+      break
+      ;;
+    -n | --dryrun )
+      noclone=1
+      nofiles=1
+      shift
+      continue
+      ;;
+    -T | --trace )    trace="true";  shift;   continue ;;
+    -v | --verbose)   wordy="true";  shift;   continue ;;
+    *)
+      echo "Internal error in $myname!" >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [ $# -lt 2 ] ; then
+  echo " *** ERROR: $myname requires at least two arguments: the hostname and destination mount point"
+  echo It has $argct excluding any recognized options
+  exit 1
+fi
+
+host=$1
+bkup=$2
+shift 2
+drives=($@)
+drives+=${driveopts[@]}
+
+if [ -v date ] ; then
+  if [ -n date ] ; then
+    if [ ! -d $bkup/$host/$date ] ; then
+      echo " *** ERROR: $bkup/$host/$date does not exist or is not a directory."
+      exit 1
+    fi
+  else
+    date=$( ls -1F | fgrep / | tail -1)
+    date=${date%/}
+  fi
+else
+  date=$(date +%Y%m%d)
+fi
+
+if ! echo $bkup | grep -E '^/' >/dev/null ; then
+  echo " *** ERROR: $bkup does not begin with a / as required"
+  exit 1
+fi
+if [ ! -d $bkup ] ; then
+  echo " *** ERROR: $bkup is not a directory as required"
+  exit 1
+fi
+
+
+if [ ${#parts[@]} -ne 0 ] ; then
+  pl=""
+  for p in ${parts[@]} ; do
+    if [ $p = ${p/:} ] ; then
+      pl+=" $p:$p"
+    else
+      pl+=" $p"
+    fi
+  done
+  parts=$pl
+  if [ ${#drives[@]} -ne 0 ] ; then
+    echo " *** ERROR: $myname cannot process both --drives and --paritions in the same command"
+    exit 1
+  fi
+elif [ ${#parts[@]} -eq 0 ] ; then
+  if [ ${#drives[@]} -eq 0 ] ; then
+    echo " *** ERROR: $myname requires one of --drives and --partitions"
+    exit 1
+  fi
+fi
+if [ "$dirok" = "" ] ; then
+  if ! lsblk | fgrep " $bkup" >/dev/null ; then
+    echo " *** ERROR: $bkup is not a mount point as required"
+    exit 1
+  fi
+fi
+if [ ! -f $bkup/backup.log ] ; then
+  echo " *** ERROR: $bkup/backup.log does not exist as required"
+  exit 1
+fi
+if [ "$host" != "${host#*-}" ] ; then
+  echo "*** ERROR: $host contains a dash \"-\", which is not allowed"
+  exit 1
+fi
+
+if [ "$host" != "${host#*/}" ] ; then
+  echo "*** ERROR: $host contains a slash \"/\", which is not allowed"
+  exit 1
+fi
+if [ -z "$newhost" ] ; then
+  if [ ! -d $bkup/$host ] ; then
+    echo " *** ERROR: $host is unknown in directory $bkup"
+    exit 1
+  fi
+else
+  if [ -d  $bkup/$host ] ; then
+    echo " *** ERROR: $host is already known in directory $bkup"
+    exit 1
+  elif [ -z "$nofiles" ] ; then
+    mkdir -p $bkup/$host
+    echo "$date  Fresh start" >$bkup/$host/backup.log
+    echo >$bkup/$host/backup.log
+  fi
+fi
+
+if [ "$overwrite" = "--output" ] ; then
+  if [ -d $bkup/$host/$date ] ; then
+    echo " *** ERROR: there is already a backup for today's date"
+    echo "            If you want to replace it, use the -f|--force option."
+    exit 1
+  fi
+fi
+
+if [ -v drives ] ; then
+  for ft in ${drives[@]}
+  do
+    fromdrive=${ft%%:*}
+    drivealias=${ft##*:}
+    if [ "$mountpoints" = "error" ] ; then
+      if [ $(lsblk -n -o MOUNTPOINT /dev/$fromdrive | grep -e . | wc -l) -ne 0 ] ; then
+        echo " *** ERROR: /dev/$fromdrive has partitions mounted on mount points:"
+        lsblk -o NAME,MOUNTPOINT /dev/$fromdrive
+        exit 1
+      fi
+    fi
+    if [ -b /dev/$fromdrive ] ; then
+      if [ $(lsblk -nd -o TYPE /dev/$fromdrive | grep -E disk | wc -l ) -ne 1 ]
+      then
+        echo " *** ERROR: /dev/$fromdrive is not a disk"
+        exit 1
+      fi
+    else
+      echo " *** ERROR: '/dev/$fromdrive' is not a block special file"
+      exit 1
+    fi
+    for part in $(lsblk --list --nohead -o NAME /dev/$fromdrive | tail -n +2)
+    do
+      if [ "$mountpoints" != "allow" ] ; then
+        # assume "skip" because "error" would already have quit
+        if [ $(lsblk -n -o MOUNTPOINT /dev/$part | grep -e . | wc -l) -ne 0 ] ; then
+          continue
+        fi
+      fi
+      partalias=${part/$fromdrive/$drivealias}
+      parts+=("$part:$partalias")
+    done
+  done
+else
+  temp=()
+  for ft in ${parts[@]}
+  do
+    frompart=${ft%%:*}
+    partalias=${ft##*:}
+    if [ -b /dev/$fromdrive ] ; then
+      if [ $(lsblk -nd -o TYPE /dev/$fromdrive | grep -E part | wc -l ) -ne 1 ]
+      then
+        echo " *** ERROR: /dev/$fromdrive is not a partition"
+        exit 1
+      fi
+    else
+      echo " *** ERROR: '/dev/$fromdrive' is not a block special file"
+      exit 1
+    fi
+    if [ $(lsblk -n --o MOUNTPOINT /dev/$frompart | grep -e . | wc -l) -ne 0 ] ; then
+      case $mountpoints in
+        allow)
+          temp+=($p)
+          ;;
+        skip)
+          ;;
+        error)
+          echo " *** ERROR: /dev/$frompart is mounted"
+          exit 1
+          ;;
+        *)
+          echo Internal Error
+          exit 1
+      esac
+    else
+      temp+=($ft)
+    fi
+  done
+  parts=(${temp[@]})
+  unset temp
+fi
+
+############################################################
+# Testing done.  It should be okay to begin meta and backups
+############################################################
+
+if [ -n "$trace" ] ; then set -x; fi
+show "Beginning operations  ......."
+
+startdir=$PWD
+if [ -z "$nofiles" ] ; then
+  mkdir -p $bkup/$host   # it may be a new directory on this backup drive
+  cd $bkup/$host
+fi
+
+recap=()
+logme "$(date) clone \"$mypath $realargs\" begins on $(hostname)"
+wordy "Host is $host"
+wordy "Target is $bkup"
+w="drives is ${drives[@]}"
+wordy "$w"
+w="parts is ${parts[@]}"
+wordy "$w"
+
+dest=$bkup/$host/$date
+bkpref=$dest/$host-$date
+if [ -z "$nofiles" ] ; then
+  mkdir --parents $dest
+fi
+
+if [ -z "$nometa" ] ; then
+  show ""
+  show "#########################################################################"
+  if [ ${#drives} -ne 0 ] ; then
+    show "# TREATING DRIVES"
+    w="#  drives is ${drives[@]} with ${#drives[@]} items"
+    wordy "$w"
+  else
+    show "# NO DRIVES SPECIFIED"
+  fi
+  show "#########################################################################"
+  for ft in ${drives[@]}
+  do
+    fromdrive=${ft%%:*}
+    drivealias=${ft##*:}
+    partline=$( sfdisk --dump /dev/$fromdrive | head -1 )
+    wordy "drive is $fromdrive and calling it $drivealias"
+    if fgrep dos <<<"$partline" >/dev/null; then
+      labelformat="mbr"
+    elif fgrep gpt <<<"$partline" >/dev/null ; then
+      labelformat="gpt"
+    else
+      # TODO: support the other possibilities: atari, aix, amiga, bsd, dvh, mac, pc98, sun and (¿)loop(?)
+      # TODO: verify that these other types are a problem.  It may be that if sfdisk supports them, it
+      #       does not matter.
+      #       could use gparted to creat them and experiment
+      echo " *** ERROR: partition table format not recognized on /dev/$fromdrive; only GPT and MBR supported"
+      exit 1
+    fi
+
+    prefix=$bkpref-$drivealias
+
+    if [ -z "$nofiles" ] ; then
+      lsblk --bytes --nodeps --noheadings         --output SIZE      /dev/$fromdrive >$prefix-size.txt
+      lsblk --bytes          --noheadings --ascii --output NAME,SIZE /dev/$fromdrive >$prefix-sizes.txt
+      sfdisk --dump /dev/$fromdrive >$prefix-dump.txt
+      recap "partition table backed up by sfdisk to $prefix-dump.txt"
+
+      parted --script /dev/$fromdrive print >$prefix-print.txt
+      recap "partition table printed by $(which parted) to $prefix-print.txt"
+
+      # FIXME: ask for, or develop, a script-friendly version of this stuff
+      sfdisk --quiet --no-act --backup /dev/$fromdrive --backup-file $dest/clonem <<EOF
+quit
+no
+EOF
+      pushd $dest >/dev/null
+        for fn in clonem-*.bak ; do
+          # TODO: remove this echo
+          show "renaming $fn to  ${fn/clonem-$fromdrive/$host-$date-$drivealias}"
+          mv $fn ${fn/clonem-$fromdrive/$host-$date-$drivealias}
+        done
+      popd >/dev/null
+
+      recap "partition table backed up (binary) to names of the form $bkpref-<offset>.bak"
+
+      lsblk -o +vendor,model,rev,serial /dev/$fromdrive >$prefix-lsblk1.txt
+      lsblk -o +fstype,label,uuid,parttype,partlabel,partuuid,partflags /dev/$fromdrive >$prefix-lsblk2.txt
+      recap "partitions listed to lsblk1 and lsblk2"
+    else
+      recap skipping partition tables and listings copies
+    fi
+
+    if [ -z "$noclone" ] ; then
+      if  fgrep 'label:' $prefix-dump.txt | fgrep gpt >/dev/null  ; then
+        # minimum size of label stuff for GPT with 512-byte blocks
+        dd bs=512 count=34 if=/dev/$fromdrive of=$prefix-firstfew.dd >/dev/null
+        recap "34 x 512-byte blocks saved in $prefix-firstfew.dd"
+      elif  fgrep 'label:' $prefix-dump.txt | fgrep dos >/dev/null  ; then
+        # some OS-en hide things in the first track of a DOS disk.
+        dd bs=512 count=63 if=/dev/$fromdrive of=$prefix-firstfew.dd >/dev/null
+        recap "63 x 512-byte blocks saved in $prefix-firstfew.dd"
+      else
+        dd bs=1M count=1 if=/dev/$fromdrive of=$prefix-firstfew.dd >/dev/null
+        recap "drive label is of unknown type; saving 1MB in $prefix-firstfew.dd"
+      fi
+      recap "Label information copied to $prefix-firstfew.dd"
+    else
+      recap "Skipping copy of first few blocks"
+    fi
+
+    # Save separate copies of scripts per drive.  Overkill??
+    if [ -z "$nofiles" ] ; then
+      pushd $startdir
+      cat $0 >$prefix-clonem.sh
+      cat $(which rsclone) >$prefix-rsclone.sh
+      recap "Saved the current scripts"
+      popd
+    else
+      recap "No scripts saved"
+    fi
+  done  # with drives
+fi      # End backing up metadata
+
+show ""
+show "#########################################################################"
+show "# TREATING PARTITIONS"
+w="# parts is ${parts[@]} with ${#parts[@]} items"
+wordy "$w"
+show "#########################################################################"
+# Gather partition info,the same for all partition types
+# Three of the fields, parttype, fstype, and partflags may be empty, so
+# we gather them separately
+for ft in ${parts[@]}
+do
+  bar
+  wordy "processing partition $frompart in $labelformat drive"
+  frompart=${ft%%:*}
+  partalias=${ft##*:}
+  ptyp=$(lsblk --list --noheadings --output parttype  /dev/$frompart)
+  ftyp=$(lsblk --list --noheadings --output fstype    /dev/$frompart)
+  pflg=$(lsblk --list --noheadings --output partflags /dev/$frompart)
+  etyp=$(lsblk --list --noheadings --output type      /dev/$frompart)
+  pt=""
+  show "partition $frompart attributes: ptyp=$ptyp; ftyp=$ftyp; pflg=$pflg; etyp=$etyp"
+  if [ "$etyp" = "disk" ] ; then
+    # This probably never occurs.
+    show ""
+    show "Processing of disk $frompart is skipped in favor of its partitions"
+    continue
+  elif [ "${etyp:0:4}" = "raid" ] ; then
+    show "Cannot process $etyp RAID $frompart"
+    continue
+  elif [ "$etyp" = "md" ] ; then
+    show "Cannot process RAID slice $frompart"
+    continue
+  fi
+  ###################################################################
+  # FIRST THE GPT PARTITION TYPES
+  ###################################################################
+  unset pt
+  unset action
+  case $ptyp in
+    21686148-6449-6e6f-744e-656564454649 )
+      action="copying BIOS boot partition with dd"
+      ftyp="BIOS Boot"
+      pt="dd"
+      op=
+      ;;
+    c12a7328-f81f-11d2-ba4b-00a0c93ec93b )
+      echo
+      case $ftyp in
+        vfat )
+          action="copying EFI data partition type as $ftyp"
+          pt=$ftyp
+          op="--clone"
+          ;;
+        * )
+          action="copying unknown file system $ftyp in EFI Partition; using dd"
+          pt="dd"
+          op=
+          ;;
+      esac
+      ;;
+    024dee41-33e7-11d3-9d69-0008c781f39f )
+      action="copying unknown MBR partition Schme with dd"
+      pt="dd"
+      op=
+      ;;
+    e3c9e316-0b5c-4db8-817d-f92df00215ae ) # Then the Microsoft-specific types
+      echo "copying Microsoft Reserved partition using dd"
+      pt="dd"
+      op=
+      ;;
+    de94bba4-06d1-4d40-a16a-bfd50179d6ac )
+      action="copyuing Windows Recovery Environment with dd"
+      pt="dd"
+      op=
+      ;;
+    ebd0a0a2-b9e5-4433-87c0-68b6b72699c7 )
+      case $ftyp in
+        vfat | ntfs )
+          action="copying Basic data partition as $ftyp"
+          pt=$ftyp
+          op="--clone"
+          ;;
+        * )
+          acttion="copying unkown file system $ftyp in Basic Data Partition; using dd"
+          pt="dd"
+          op=
+          ;;
+      esac
+      ;;
+    0fc63daf-8483-4772-8e79-3d69d8477de4 ) # Then the Linux -specific partition types
+      case $ftyp in
+        ext2 | ext3 | ext4 | minix | nilfs2 )
+          action="copying Basic data partition with $ftyp"
+          pt=$ftyp
+          op="--clone"
+          ;;
+        linux_raid_member )
+          echo "#####################################"
+          echo "# ignoring RAID member /dev/$frompart"
+          echo "#####################################"
+          continue # skip entirely
+          ;;
+        * )
+          action="copying unkown file system $ftyp using dd"
+          pt="dd"
+          op=
+          ;;
+      esac
+      ;;
+    0657fd6d-a4ab-43c4-84e5-0933c84b4f4f )
+      case $ftyp in
+        swap )
+          action="creating dummy entry for swap partition on /dev/$frompart; should format on restoration"
+          pt="swap"
+          ;;
+        *)
+          action="copying unexpected filesystem type \"$ftyp\" in GPT linux swap partition /dev/$frompart; using dd"
+          pt=dd
+          op=
+          ;;
+      esac
+      ;;
+    ###################################################################
+    # NOW THE MBR partition types
+    ###################################################################
+    0x5 )
+      # Extended partitions have no filesystem;
+      action="creating dummy entry for extended partition on /dev/$frompart"
+      pt="x"
+      ;;
+    0x7 | 0x27) # Linux
+      case $ftyp in
+        ntfs)
+          action="copying /dev/$frompart as ntfs"
+          pt=$ftyp
+          op=--clone
+          ;;
+        ext2 | ext3 | ext4 | minix | nilfs2 )
+          action="copying Basic data partition type with $ftyp"
+          pt=$ftyp
+          op="--clone"
+          ;;
+        *)
+          action="copying unexpected filesystem type \"$ftyp\" in /dev/♮rompart doing dd"
+          pt="dd"
+          op=
+          ;;
+      esac
+      ;;
+    0x1 | 0x4 | 0x6 | 0xb | 0xc | 0xe | 0x11 | 0x14 | 0x16 | 0x1b | 0x1c | 0x1e ) # MSFT
+      # DOCS at https://thestarman.pcministry.com/asm/mbr/PartTypes.htm say
+      # 0x01: FAT-12
+      # 0x04: FAT-16 less than 32MB
+      # 0x06: FAT-16 32MB or more
+      # 0x0B: FAT-32
+      # 0x0C: FAT-32 with int 13 extensions
+      # 0x0e: FAT-16 with INT 13 extensions (>= 32MB)
+      # and add a 0x10 to the above for hidden partitions
+      case $ftyp in
+        fat12 | fat16 | fat32 | vfat | fat )
+          action="copying /dev/$frompart as vfat"
+          pt="vfat"
+          op=--clone
+          ;;
+        *)
+          action="copying unexpected filesystem type \"$ftyp\" in MSFT /dev/♮rompart doing dd"
+          pt="dd"
+          op=
+          ;;
+      esac
+      ;;
+    0x82)
+      case $ftyp in
+        swap)
+          action="creating file $bkpref-$partalias-swap.clone for /dev/$frompart containing UUID" >>tmpclone.log
+          pt="swap"
+          ;;
+        *)
+          action="copying unexpected filesystem /dev/$frompart type \"$ftyp\" in MSFT /dev/$frompart doing dd"
+          pt=dd
+          op=
+          ;;
+      esac
+      ;;
+    0x83)
+      case $ftyp in
+        ext2 | ext3 | ext4 | extfs | nilfs2 | btrfs)
+          action="copying /dev/$frompart using $ftyp"
+          pt=$ftyp
+          op=--clone
+          ;;
+        *)
+          action="copying /dev/$frompart with unexpected type \"$ftyp\" using dd"
+          pt=dd
+          op=
+          ;;
+      esac
+      ;;
+    *)
+      action="copying /dev/$frompart with type \"$ftyp\" in unexpected partition type $ptyp using dd"
+      pt=dd
+      op=
+      ;;
+  esac
+  if [ ! -v pt ] ; then
+    logme " *** INTERNAL ERROR: no copy menthod set for /dev/$frompart"
+    exit 1
+  fi
+  if [ ! -v action ] ; then
+    logme " *** INTERNAL ERROR: no action description set for /dev/$frompart"
+    exit 1
+  fi
+
+  if [ -n "$noclone" ] || [ -n "$nofile" ] ; then
+    action=${action/copying/would copy}
+    action=${action/creating/would create}
+  fi
+  recap "$frompart $etyp is $ftyp; will treat with $pt and file as $partalias"
+  logme "$action"
+
+  if [ "$pt" = "swap" ] ; then
+    if [ -z "$nofiles" ] ; then
+      lsblk --nohead -o UUID /dev/$frompart| tail -1 > $bkpref-$partalias-swap.clone
+    fi
+  elif [ "$pt" = "x" ] ; then
+    unset action # nuff said about extended partitions
+  else
+    if [ -n "$noclone" ] ; then
+      true
+    elif partclone.$pt $op --rescue --quiet --source /dev/$frompart \
+      $overwrite $bkpref-$partalias-$pt.clone --logfile tmpclone.log 2>&1
+    then
+      action+=" -- SUCCESS"
+    else
+      if [ "$pt" = "dd" ] ; then
+        action+="; FAILED and nothing else to try"
+      else
+        action+="; FAILED -- retrying with partclone.dd"
+        echo $action
+        recap+=("$action")
+        if partclone.dd --rescue --quiet --source /dev/$frompart \
+          $overwrite $bkpref-$partalias-dd.clone --logfile tmpclone.log 2>&1
+        then
+          action+=" -- SUCCESS"
+        else
+          action+=" -- ALSO FAILED"
+        fi
+      fi
+    fi
+  fi
+  if [ -n "$action" ] ; then
+    if [ -n "$noclone" ] || [ -n "$nofile" ] ; then
+      action=${action/doing/would do}
+      action=${action/creating/would create}
+    else
+      action=${action/doing/did}
+      action=${action/creating/created}
+    fi
+    recap "$action"
+  fi
+done
+echo
+bar
+show "Copyting clone software to the backup medium"
+cp $(which clonem) $bkup/clonem
+cp $(which rsclone) $bkup/rsclone
+show "Backup is complete"
+recap "I am $0 version $version"
+
+logme "$(date) \"$mypath $realargs\" finished on $(hostname)"
+bar
+bar
+if [ -n "$nofiles" ] ; then
+  show "No files were created."
+else
+  show "see $bkpref-clone.log for details"
+  show "Recap follows"
+  for i in "${recap[@]}" ; do
+    show "    $i"
+  done
+  chattr -iR $bkup/$host/$date
+fi
+show "the end"
