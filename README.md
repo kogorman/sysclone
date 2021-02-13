@@ -39,6 +39,12 @@ The `-h` option prints a man page for the command.
 
 The code was developed on an Ubuntu system, with partclone installed.  It relies on a number of commands which are normally present on most or all Linux systems, but a few may be more rare, such as `udevadm`, which expects the UDEV device management subsystem.
 
+## Limitations
+
+The output must fit withing the space remaining on the single target volume.
+
+Only the filesystem and partition types of normal Linux and Windows, DOS and UEFI partition schemes are supported.
+
 ## License and copying
 
 Sysclone is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 2 of the License, or (at your option) any later version published by the Free Software Foundation.
