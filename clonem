@@ -38,6 +38,7 @@ bar() {
   echo ===========================================================================
 }
 
+# Show a string; Log it unless all file creation is blocked.
 show() {
   echo $1
   if [ -z "$nofiles" ] ; then
@@ -45,17 +46,20 @@ show() {
   fi  
 } 
 
+# Show only if verbose output requested.  Do not log.
 wordy() {
   if [ -n "$wordy" ] ; then
     echo "$1"
   fi
 }
   
+# Show, and queue for recap at the end of the run.
 recap() {
   recap+=("$1")
   show "$1"
 }                                                                                                                    
   
+# Log in several places, recap and show
 logme() {
   if [ -z "$nofiles" ] ; then
     echo "$1" >>/root/backup.log
@@ -296,8 +300,7 @@ fi
 host=$1
 bkup=$2
 shift 2
-drives=($@)
-drives+=${driveopts[@]}
+drives+=($@ ${driveopts[@]})
 
 if [ -v date ] ; then
   if [ -n date ] ; then
@@ -322,27 +325,6 @@ if [ ! -d $bkup ] ; then
   exit 1
 fi
 
-
-if [ ${#parts[@]} -ne 0 ] ; then
-  pl=""
-  for p in ${parts[@]} ; do
-    if [ $p = ${p/:} ] ; then
-      pl+=" $p:$p"
-    else
-      pl+=" $p"
-    fi
-  done
-  parts=$pl
-  if [ ${#drives[@]} -ne 0 ] ; then
-    echo " *** ERROR: $myname cannot process both --drives and --paritions in the same command"
-    exit 1
-  fi
-elif [ ${#parts[@]} -eq 0 ] ; then
-  if [ ${#drives[@]} -eq 0 ] ; then
-    echo " *** ERROR: $myname requires one of --drives and --partitions"
-    exit 1
-  fi
-fi
 if [ "$dirok" = "" ] ; then
   if ! lsblk | fgrep " $bkup" >/dev/null ; then
     echo " *** ERROR: $bkup is not a mount point as required"
@@ -372,9 +354,7 @@ else
     echo " *** ERROR: $host is already known in directory $bkup"
     exit 1
   elif [ -z "$nofiles" ] ; then
-    mkdir -p $bkup/$host
-    echo "$date  Fresh start" >$bkup/$host/backup.log
-    echo >$bkup/$host/backup.log
+    wordy "Will have to create a new directory $bkup/$host and its log"
   fi
 fi
 
@@ -386,7 +366,45 @@ if [ "$overwrite" = "--output" ] ; then
   fi
 fi
 
-if [ -v drives ] ; then
+if [ ${#parts[@]} -ne 0 ] ; then
+  echo "have parts"
+  pl=""
+  for p in ${parts[@]} ; do
+    if [ $p = ${p/:} ] ; then
+      pl+=" $p:$p"
+    else
+      pl+=" $p"
+    fi
+  done
+  parts=$pl
+  if [ ${#drives[@]} -ne 0 ] ; then
+    echo " *** ERROR: $myname cannot process both --drives and --paritions in the same command"
+    exit 1
+  fi
+elif [ ${#drives[@]} -eq 0 ] ; then
+  for drive in $(lsblk --nodeps --noheading --include 8 -o NAME) ; do
+    okay=true
+    for mount in $(lsblk -o MOUNTPOINT --noheading /dev/$drive) ; do
+      if [ -n "$mount" ] ; then
+        unset okay
+        break
+      fi
+    done
+    if [ -v okay ] ; then
+      drives+=($drive)
+    fi
+  done
+  
+  # Did we find any drives ready for backup?
+  if [ ${#drives[@]} -eq 0 ] ; then
+    echo " *** ERROR: $myname cannot determine drives.  Is something mounted by mistake?"
+    exit 1
+  else
+    show "Found ${#drives[@]} drives to back up: ${drives[@]}"
+  fi
+fi
+
+if [ ${#drives[@]} -ne 0 ] ; then
   for ft in ${drives[@]}
   do
     fromdrive=${ft%%:*}
@@ -466,6 +484,12 @@ fi
 if [ -n "$trace" ] ; then set -x; fi
 show "Beginning operations  ......."
 
+if [ -n "$newhost" ] && [ -z "$nofiles" ; then
+  mkdir -p $bkup/$host
+  echo "$date  Fresh start" >$bkup/$host/backup.log
+  echo >$bkup/$host/backup.log
+  wordy "Make fresh start for $bkup/$host/backup.log"
+fi
 startdir=$PWD
 if [ -z "$nofiles" ] ; then
   mkdir -p $bkup/$host   # it may be a new directory on this backup drive
@@ -547,7 +571,7 @@ EOF
       lsblk -o +fstype,label,uuid,parttype,partlabel,partuuid,partflags /dev/$fromdrive >$prefix-lsblk2.txt
       recap "partitions listed to lsblk1 and lsblk2"
     else
-      recap skipping partition tables and listings copies
+      recap "skipping partition tables and listings copies"
     fi
 
     if [ -z "$noclone" ] ; then
