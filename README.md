@@ -9,11 +9,11 @@ Copies of the current clone and restore scripts are copied to the backup medium,
 
 ## Example command
 
-> `clonem -N mysys /mnt/target`
+> `sybak -N mysys /mnt/target`
 
 This will back up all drives that **do not** currently have partitions mounted, and place the results in a new directory `/mnt/target/mysys` under a subdirectory named by the current date, such as `/mnt/mysys/20200213`.  Since the running system and the target drive necessarily have mounted partitions, they are excluded from the backup.  The backup includes enough information to rebuild the partition tables.
 
-`rsclone mysys /mnt/target`
+`syres mysys /mnt/target`
 
 This will restore all drives and partition from the latest-dated backup on `/mnt/target/mysys`
 
