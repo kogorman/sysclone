@@ -2,7 +2,7 @@
 # Clone a drive, or some partitions, to an archive volume
 
 version=$(cat <<<"
-# Last Modified: Fri Feb 12 16:15:22 PST 2021
+# Last Modified: Fri Feb 19 17:30:20 PST 2021
 ")
 
 #    This file is part of Sysclone.
@@ -482,7 +482,8 @@ fi
 ############################################################
 
 if [ -n "$trace" ] ; then set -x; fi
-show "Beginning operations  ......."
+dest=$bkup/$host/$date
+bkpref=$dest/$host-$date
 
 if [ -n "$newhost" ] && [ -z "$nofiles" ; then
   mkdir -p $bkup/$host
@@ -490,6 +491,7 @@ if [ -n "$newhost" ] && [ -z "$nofiles" ; then
   echo >$bkup/$host/backup.log
   wordy "Make fresh start for $bkup/$host/backup.log"
 fi
+show "Beginning operations  ......."
 startdir=$PWD
 if [ -z "$nofiles" ] ; then
   mkdir -p $bkup/$host   # it may be a new directory on this backup drive
@@ -505,8 +507,6 @@ wordy "$w"
 w="parts is ${parts[@]}"
 wordy "$w"
 
-dest=$bkup/$host/$date
-bkpref=$dest/$host-$date
 if [ -z "$nofiles" ] ; then
   mkdir --parents $dest
 fi
@@ -779,7 +779,7 @@ do
     0x82)
       case $ftyp in
         swap)
-          action="creating file $bkpref-$partalias-swap.clone for /dev/$frompart containing UUID" >>tmpclone.log
+          action="creating file $bkpref-$partalias-swap.clone for /dev/$frompart containing UUID"
           pt="swap"
           ;;
         *)
@@ -835,7 +835,7 @@ do
     if [ -n "$noclone" ] ; then
       true
     elif partclone.$pt $op --rescue --quiet --source /dev/$frompart \
-      $overwrite $bkpref-$partalias-$pt.clone --logfile tmpclone.log 2>&1
+      $overwrite $bkpref-$partalias-$pt.clone 2>&1
     then
       action+=" -- SUCCESS"
     else
@@ -846,7 +846,7 @@ do
         echo $action
         recap+=("$action")
         if partclone.dd --rescue --quiet --source /dev/$frompart \
-          $overwrite $bkpref-$partalias-dd.clone --logfile tmpclone.log 2>&1
+          $overwrite $bkpref-$partalias-dd.clone 2>&1
         then
           action+=" -- SUCCESS"
         else
