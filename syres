@@ -2,7 +2,7 @@
 # Restore a drive, or some partitions, from an archive volume
 
 version=$(cat <<<"
-# Last Modified: Fri Feb 12 16:15:19 PST 2021
+# Last Modified: Tue Feb 23 11:24:44 PST 2021
 " )
 
 #    This file is part of Sysclone.
@@ -78,9 +78,9 @@ while true ; do
       echo '        MOUNTPOINT must be a path to a directory.  It is called'
       echo '            MOUNTPOINT for consistency with partclone \(q.v.\).'
       echo '        DRIVENAME is a comma-separated list.  If present, each'
-      echo '            must be the name of a drive in the backup, optionally"
-      echo '            followed by a colon and an alias to use in the backup."
-      echo '            More drives may be specified in the --drives option."
+      echo "            must be the name of a drive in the backup, optionally"
+      echo "            followed by a colon and an alias to use in the backup."
+      echo "            More drives may be specified in the --drives option."
       echo "OPTIONS:"
       echo "  -D | --datestamp=DATE directory name \(needed only if not"
       echo "             the most recent.\)  It is called DATE"
@@ -139,7 +139,7 @@ while true ; do
       continue
       ;;
     -S | --nosize )
-      nosize=true
+      nosize="--force"
       shift
       continue
       ;;
@@ -478,7 +478,11 @@ for ft in ${drives[@]} ; do
     then
       if [ -z "$dryrun" ] ; then
         echo Restoring GPT label with sfdisk, wiping signatures
-        sfdisk --no-reread -w always -W always /dev/$target <$prefix-dump.txt
+        if [ "$nosize" = "--force" ] ; then
+          fgrep -v "last-lba" $prefix-dump.txt | sfdisk --no-reread "$nosize" -w always -W always /dev/$target
+        else
+          sfdisk --no-reread "$nosize" -w always -W always /dev/$target <$prefix-dump.txt
+        fi
         
         # ensure proper placement of 2nd GPT
         echo Rebuilding secondary GPT
@@ -595,7 +599,7 @@ if [ -z "$dryrun" ] ; then
     done
 
     udevadm settle
-    echo The sysrem now contains 
+    echo The system now contains 
     lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT | grep -Ev loop
   fi
   echo Clone restored
