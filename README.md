@@ -33,7 +33,7 @@ Drives and partitions can be added to a current backup
 
 Drives and partitions can be renamed during either the clone or the restore step.  This is useful to correct for any renaming that occurs because you're booted from an external drive.
 
-The `-h` option prints a man page for the command.
+The `-h` option prints a man page for the command.  The two commands are sybak and syres.
 
 ## Requirements
 
@@ -41,9 +41,9 @@ The code was developed on an Ubuntu system, with partclone installed.  It relies
 
 ## Limitations
 
-The output must fit withing the space remaining on the single target volume.
+The output must fit within the space remaining on the single target volume.
 
-Only the filesystem and partition types of normal Linux and Windows, DOS and UEFI partition schemes are supported.
+Only the filesystem and partition types of normal Linux and Windows, DOS and UEFI partition schemes are supported.  This may change if time permits.
 
 RAID arrays are not backed up.
 
