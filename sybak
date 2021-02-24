@@ -492,12 +492,12 @@ if [ -n "$newhost" ] && [ -z "$nofiles" ; then
   echo >$bkup/$host/backup.log
   wordy "Make fresh start for $bkup/$host/backup.log"
 fi
-show "Beginning operations  ......."
 startdir=$PWD
 if [ -z "$nofiles" ] ; then
-  mkdir -p $bkup/$host   # it may be a new directory on this backup drive
+  mkdir -p $bkup/$host/$date
   cd $bkup/$host
 fi
+show "Beginning operations  ......."
 
 recap=()
 logme "$(date) clone \"$mypath $realargs\" begins on $(hostname)"
@@ -554,15 +554,15 @@ if [ -z "$nometa" ] ; then
       recap "partition table printed by $(which parted) to $prefix-print.txt"
 
       # FIXME: ask for, or develop, a script-friendly version of this stuff
-      sfdisk --quiet --no-act --backup /dev/$fromdrive --backup-file $dest/clonem <<EOF
+      sfdisk --quiet --no-act --backup /dev/$fromdrive --backup-file $dest/sybak <<EOF
 quit
 no
 EOF
       pushd $dest >/dev/null
-        for fn in clonem-*.bak ; do
+        for fn in sybak-*.bak ; do
           # TODO: remove this echo
-          show "renaming $fn to  ${fn/clonem-$fromdrive/$host-$date-$drivealias}"
-          mv $fn ${fn/clonem-$fromdrive/$host-$date-$drivealias}
+          show "renaming $fn to  ${fn/sybak-$fromdrive/$host-$date-$drivealias}"
+          mv $fn ${fn/sybak-$fromdrive/$host-$date-$drivealias}
         done
       popd >/dev/null
 
@@ -596,8 +596,8 @@ EOF
     # Save separate copies of scripts per drive.  Overkill??
     if [ -z "$nofiles" ] ; then
       pushd $startdir
-      cat $0 >$prefix-clonem.sh
-      cat $(which rsclone) >$prefix-rsclone.sh
+      cat $0 >$prefix-sybak.sh
+      cat $(which syres) >$prefix-syres.sh
       recap "Saved the current scripts"
       popd
     else
@@ -870,8 +870,8 @@ done
 echo
 bar
 show "Copyting clone software to the backup medium"
-cp $(which clonem) $bkup/clonem
-cp $(which rsclone) $bkup/rsclone
+cp $(which sybak) $bkup/sybak
+cp $(which syres) $bkup/syres
 show "Backup is complete"
 recap "I am $0 version $version"
 
