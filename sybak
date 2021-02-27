@@ -2,7 +2,7 @@
 # Clone a drive, or some partitions, to an archive volume
 
 version=$(cat <<<"
-# Last Modified: Fri Feb 19 17:30:20 PST 2021
+# Last Modified: Sat Feb 27 12:30:43 PST 2021
 ")
 
 #    This file is part of Sysclone.
@@ -83,10 +83,10 @@ then
   echo "$myname requires the GNU getopt program from util-linux" >&2
   exit 1
 fi
-realargs=$(getopt --options 'Cc::Dd:FfhM:mNnp:TvV' \
+realargs=$(getopt --options 'Cc::Dd:FfhM:mNnp:STvV' \
   --longoptions 'noclone,collection::'\
   --longoptions 'directory,drives:,dryrun,force,help,mountpoints:,mounted:'\
-  --longoptions 'newhost,nometa,partitions:,trace,verbose,version'\
+  --longoptions 'newhost,nometa,partitions:,nosoloswap,trace,verbose,version'\
   -- "$@")
 if [ $? -ne 0 ]; then
   echo 'Terminating...' >&2
@@ -103,6 +103,7 @@ dirok=""
 newhost=""
 mountpoints="error"
 nometa=""
+nosolo=""
 unset date
 unset parts
 unset drives
@@ -203,6 +204,9 @@ do
       echo "                   Incompatible with --drives. Implies --nometa."
       echo "                   The optional ALIAS for each partition is the"
       echo "                   name it will get in the backup."
+      echo "  -S |  --nosoloswap  Do not select a drive whose only partitions are"
+      echo "                   swap.  Not allowed if drives or partitions are"
+      echo "                   named on the command line.  Should be rare."
       echo "  -T | --trace     Output a debugging trace of actual BASH commands"
       echo "  -v | --verbose   Output extra details to stdout"
       echo "  -v | --verbose   output additional information about processing"
@@ -212,6 +216,13 @@ do
       echo "Required arguments to long options are required of short options as"
       echo "well.  Optional arguments may not be separated from their option by"
       echo "any space characters."
+      echo ""
+      echo "If the command-line does not name any drives or partitions,"
+      echo "the backup will include all drives with no mounted partitions,"
+      echo "Drives with only swap partition(s) mounted will also be included"
+      echo "unless the --nosoloswap option is present.  Care must be taken"
+      echo "to account for any change of drive names on account of the"
+      echo "drives that DO have mounted partitions."
       echo
       echo Examples:
       echo "      $myname --help"
@@ -222,12 +233,15 @@ do
       echo "      touch /root/images/backup.log"
       echo "      $myname -D -N whatever /root/images sdc"
       echo
-      echo "  Make a subsequent backup on any following day:"
+      echo "  Make a subsequent backup of /dev/sdc on any following day:"
       echo "      $myname -D whatever -dsdc /root/images"
       echo
       echo "  Make the same backup to a drive mounted on /mnt/mydrive"
       echo '  (use -N the first time)'
       echo "      $myname [-N] whatever --drives=sdc /mnt/mydrive"
+      echo
+      echo "  Make a backup of sda and sdb, skipping any mounted drives"
+      echo "      $myname -m skip whatever /mnt/bkdrive sda -d sdb"
       echo
       echo VERSION
       echo " " Is, or is based on the one tagged $version
@@ -267,6 +281,11 @@ do
       parts+=(${2//,/ })   # replace ALL commas with spaces, make it a list
       nometa="true"
       shift 2
+      continue
+      ;;
+    -S | --nosoloswap )
+      nosolo=true
+      shift
       continue
       ;;
     -V | --version)
@@ -359,15 +378,25 @@ else
   fi
 fi
 
-if [ "$overwrite" = "--output" ] ; then
-  if [ -d $bkup/$host/$date ] ; then
-    echo " *** ERROR: there is already a backup for today's date"
-    echo "            If you want to replace it, use the -f|--force option."
+if [ "$overwrite" = "--output" ] && [ -d $bkup/$host/$date ] ; then
+  echo " *** ERROR: there is already a backup for today's date"
+  echo "            If you want to replace it, use the -f|--force option."
+  exit 1
+fi
+
+if [ ${#parts[@]} -ne 0 ] || [ ${#drives[@]} -ne 0 ] ; then
+  if [ -n "$noswap" ] ; then
+    echo " *** ERROR: --noswap cannot be used when there are drives or partitions on the command line"
     exit 1
   fi
 fi
 
+autopick=""
 if [ ${#parts[@]} -ne 0 ] ; then
+  if [ ${#drives[@]} -ne 0 ] ; then
+    echo " *** ERROR: $myname cannot process both --drives and --paritions in the same command"
+    exit 1
+  fi
   echo "have parts"
   pl=""
   for p in ${parts[@]} ; do
@@ -378,30 +407,44 @@ if [ ${#parts[@]} -ne 0 ] ; then
     fi
   done
   parts=$pl
-  if [ ${#drives[@]} -ne 0 ] ; then
-    echo " *** ERROR: $myname cannot process both --drives and --paritions in the same command"
+elif [ ${#drives[@]} -eq 0 ] ; then
+  # Gather prospects when neither drives nor partitions have been named.
+  if [ "$mountpoints" != "error" ] ; then
+    echo ' *** ERROR: the --mountpoints option other than "error" requires drives or partitions to be explicit'
     exit 1
   fi
-elif [ ${#drives[@]} -eq 0 ] ; then
   for drive in $(lsblk --nodeps --noheading --include 8 -o NAME) ; do
     okay=true
+    ct=""
     for mount in $(lsblk -o MOUNTPOINT --noheading /dev/$drive) ; do
-      if [ -n "$mount" ] ; then
+      if [ "$mount" -eq "[SWAP]" ] && [ -z "$noswap" ] ; then
+        ct=true
+      elif [ -n "$mount" ] ; then
         unset okay
         break
+      else
+        ct=true
       fi
     done
     if [ -v okay ] ; then
-      drives+=($drive)
+      if [ -n "$ct" ] ; then
+        drives+=($drive)
+        wordy " -- Selecting /dev/$drive for backup"
+      else
+        wordy " -- No partitions found on /dev/$drive"
+      fi
+    else
+      wordy " -- Mountpoint excludes /dev/$drive from backup"
     fi
   done
   
   # Did we find any drives ready for backup?
-  if [ ${#drives[@]} -eq 0 ] ; then
+  if [ ${#drives[@]} -ne 0 ] ; then
+    show "Found ${#drives[@]} drives to back up: ${drives[@]}"
+    autopick=true
+  else
     echo " *** ERROR: $myname cannot determine drives.  Is something mounted by mistake?"
     exit 1
-  else
-    show "Found ${#drives[@]} drives to back up: ${drives[@]}"
   fi
 fi
 
@@ -445,14 +488,14 @@ else
   do
     frompart=${ft%%:*}
     partalias=${ft##*:}
-    if [ -b /dev/$fromdrive ] ; then
-      if [ $(lsblk -nd -o TYPE /dev/$fromdrive | grep -E part | wc -l ) -ne 1 ]
+    if [ -b /dev/$frompart ] ; then
+      if [ $(lsblk -nd -o TYPE /dev/$frompart | grep -E part | wc -l ) -ne 1 ]
       then
-        echo " *** ERROR: /dev/$fromdrive is not a partition"
+        echo " *** ERROR: /dev/$frompart is not a partition"
         exit 1
       fi
     else
-      echo " *** ERROR: '/dev/$fromdrive' is not a block special file"
+      echo " *** ERROR: '/dev/$frompart' is not a block special file"
       exit 1
     fi
     if [ $(lsblk -n --o MOUNTPOINT /dev/$frompart | grep -e . | wc -l) -ne 0 ] ; then
@@ -463,8 +506,12 @@ else
         skip)
           ;;
         error)
-          echo " *** ERROR: /dev/$frompart is mounted"
-          exit 1
+          if [ -n "$autopick" ] ; then
+            temp+=($p)
+          else
+            echo " *** ERROR: /dev/$frompart is mounted"
+            exit 1
+          fi
           ;;
         *)
           echo Internal Error
