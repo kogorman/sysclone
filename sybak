@@ -672,7 +672,7 @@ do
       op=
       ;;
     e3c9e316-0b5c-4db8-817d-f92df00215ae ) # Then the Microsoft-specific types
-      echo "copying Microsoft Reserved partition using dd"
+      action="copying Microsoft reserved partition Schme with dd"
       pt="dd"
       op=
       ;;
