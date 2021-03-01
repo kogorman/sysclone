@@ -2,7 +2,7 @@
 # Restore a drive, or some partitions, from an archive volume
 
 version=$(cat <<<"
-# Last Modified: Tue Feb 23 11:24:44 PST 2021
+# Last Modified: Sun Feb 28 18:21:22 PST 2021
 " )
 
 #    This file is part of Sysclone.
@@ -67,7 +67,7 @@ while true ; do
       echo
       echo "SYNOPSIS"
       echo "        $myname [ -h | --help ]"
-      echo "        $myname [ -V | --VERSION ]"
+      echo "        $myname [ -V | --version ]"
       echo "        $myname [OPTIONS] SYSTEM MOUNTPOINT [DRIVENAME]..."
       echo
       echo DESCRIPION:

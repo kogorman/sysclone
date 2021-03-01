@@ -2,7 +2,7 @@
 # Clone a drive, or some partitions, to an archive volume
 
 version=$(cat <<<"
-# Last Modified: Sat Feb 27 12:30:43 PST 2021
+# Last Modified: Sun Feb 28 18:20:34 PST 2021
 ")
 
 #    This file is part of Sysclone.
@@ -141,7 +141,7 @@ do
       echo
       echo "SYNOPSIS"
       echo "        $myname [ -h | --help ]"
-      echo "        $myname [ -V | --VERSION ]"
+      echo "        $myname [ -V | --version ]"
       echo "        $myname [OPTIONS] SYSTEM MOUNTPOINT [DRIVENAME ...]"
       echo
       echo "DESCRIPTION"
@@ -208,7 +208,6 @@ do
       echo "                   swap.  Not allowed if drives or partitions are"
       echo "                   named on the command line.  Should be rare."
       echo "  -T | --trace     Output a debugging trace of actual BASH commands"
-      echo "  -v | --verbose   Output extra details to stdout"
       echo "  -v | --verbose   output additional information about processing"
       echo "                      (very verbose) mostly for debugging"
       echo "  -V | --version   Print the last modified timestamp and quit"
