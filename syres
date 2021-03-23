@@ -2,7 +2,7 @@
 # Restore a drive, or some partitions, from an archive volume
 
 version=$(cat <<<"
-# Last Modified: Mon Mar 22 14:08:09 PDT 2021
+# Last Modified: Tue Mar 23 13:50:07 PDT 2021
 " )
 
 #    This file is part of Sysclone.
@@ -254,7 +254,7 @@ if [ ${#parts[@]} -gt 0 ] ; then
   done
   parts=(${pl[@]})
   if [ -n "$wordy" ] ; then
-    echo parts is now ${parts[@]}
+    echo "Starting partition pairing; parts is now ${parts[@]}"
   fi
   for pp in ${parts[@]} ; do
     frompart=${pp%%:*}
@@ -391,14 +391,26 @@ else
     echo "Forming partition list from drive list"
   fi
   for d in ${drives[@]} ; do
-    f=${d%:*}
-    t=${d#*:}
-    clones=( $prefix$f*-*.clone )
+    fromdrive=${d%:*}
+    lastfrom=${fromdrive:$((${#fromdrive}-1))}        # kludge to get around BASH bug
+    if [[ "$lastfrom" < "0" ]] || [[ "$lastfrom" > "9" ]] ; then
+      frompad=""
+    else
+      frompad="p"
+    fi
+    targetdrive=${d#*:}
+    lasttarget=${targetdrive:$((${#targetdrive}-1))}  # same kludge to get around BASH bug
+    if [[ "$lasttarget" < "0" ]] || [[ "$lasttarget" > "9" ]] ; then
+      targetpad=""
+    else
+      targetpad="p"
+    fi
+    clones=( $prefix$fromdrive*-*.clone )
     for c in ${clones[@]} ; do
-       n1=${c#$prefix}
-       s=${n1%%-*.clone}
-       d=${s/$f/$t}
-       parts+=("$s:$d")
+       clonefilename=${c#$prefix}
+       sourcename=${clonefilename%%-*.clone}
+       destname=${sourcename/$fromdrive$frompad/$targetdrive$targetpad}
+       parts+=("$sourcename:$destname")
      done
    done
   if [ -n "$wordy" ] ; then
@@ -415,6 +427,11 @@ if [ $errors -gt 0 ] ; then
   fi
   exit 1
 fi
+
+if [ -n "$wordy" ] ; then
+  echo
+  echo Checks are done and all seems okay, the work begins now.
+fi
 echo Doing $0 $system ${drives[@]} $target $datestamp
 echo Drives is ${drives[@]}
 echo Parts is ${parts[@]}
@@ -426,7 +443,9 @@ if [ -z "$dryrun" ] ; then
     sleep 1
   done
 else
-  echo No delay because nothing will be altered.
+  if [ -n "$wordy" ] ; then
+    echo No delay because nothing will be altered.
+  fi
 fi
 echo
 
@@ -529,8 +548,12 @@ if [  $errors -gt 0 ] ; then
   exit 1
 fi
 rm -f /tmp/$BASHPID-msgs
+if [ -n "$wordy" ] ; then
+  echo Whole drives done.
+  echo
+fi
 
-[ -n "$wordy" ] && echo parts is $parts
+[ -n "$wordy" ] && echo "Starting partition work; parts is $parts"
 
 for ft in ${parts[@]} ; do
   bar
@@ -559,34 +582,38 @@ for ft in ${parts[@]} ; do
   fi
   echo
   echo Processing partition $fromdrive to /dev/$tdrv as $ptyp
-  { time -p {
-    {
-      if [ "$ptyp" = "swap" ] ; then
-        if [ -z "$dryrun" ] ; then
-          mkswap -c --uuid $(cat $input) /dev/$tdrv
-          echo Swap partition created
-        else
-          echo Would create swap partition
-        fi
-      else
-        if [ -z "$dryrun" ] ; then
-          if [ "$ptyp" = "dd" ] ; then
-            op=""
+  {
+    time -p {
+      {
+        if [ "$ptyp" = "swap" ] ; then
+          if [ -z "$dryrun" ] ; then
+            mkswap -c --uuid $(cat $input) /dev/$tdrv
+            echo Swap partition created
           else
-            op=" --restore "
+            echo Would create swap partition
           fi
-          partclone.$ptyp $op --quiet --source $input --overwrite /dev/$tdrv --logfile tmpclone.log 2>&1
         else
-          echo "Would restore partition /dev/$tdrv from backup clone"
+          if [ -z "$dryrun" ] ; then
+            if [ "$ptyp" = "dd" ] ; then
+              op=""
+            else
+              op=" --restore "
+            fi
+            partclone.$ptyp $op --quiet --source $input --overwrite /dev/$tdrv --logfile tmpclone.log 2>&1
+          else
+            echo "Would restore partition /dev/$tdrv from backup clone"
+          fi
         fi
+      } 2>&1 | sed --unbuffered "s/^/   > /"
+      if [ -z "$dryrun" ] ; then
+        date >>restore.log
+        cat tmpclone.log >>restore.log
+        echo >>restore.log
+        sync
+        echo sync done
       fi
-    } 2>&1 | sed --unbuffered "s/^/   > /"
-    date >>restore.log
-    cat tmpclone.log >>restore.log
-    echo >>restore.log
-    sync
-    echo sync done
-    } } 2>&1 | sed --unbuffered "s/^/   > /"
+    }
+  } 2>&1 | sed --unbuffered "s/^/   > /"
 done
 
 if [ -z "$dryrun" ] ; then
