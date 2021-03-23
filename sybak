@@ -2,7 +2,7 @@
 # Clone a drive, or some partitions, to an archive volume
 
 version=$(cat <<<"
-# Last Modified: Sun Feb 28 18:20:34 PST 2021
+# Last Modified: Mon Mar 22 14:07:59 PDT 2021
 ")
 
 #    This file is part of Sysclone.
@@ -463,6 +463,7 @@ if [ ${#drives[@]} -ne 0 ] ; then
       if [ $(lsblk -nd -o TYPE /dev/$fromdrive | grep -E disk | wc -l ) -ne 1 ]
       then
         echo " *** ERROR: /dev/$fromdrive is not a disk"
+        echo " ***        Did you mean to use the -p option?"
         exit 1
       fi
     else
@@ -491,6 +492,7 @@ else
       if [ $(lsblk -nd -o TYPE /dev/$frompart | grep -E part | wc -l ) -ne 1 ]
       then
         echo " *** ERROR: /dev/$frompart is not a partition"
+        echo "            Did you use the -p option by mistake?"
         exit 1
       fi
     else

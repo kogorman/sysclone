@@ -2,7 +2,7 @@
 # Restore a drive, or some partitions, from an archive volume
 
 version=$(cat <<<"
-# Last Modified: Sun Feb 28 18:21:22 PST 2021
+# Last Modified: Mon Mar 22 14:08:09 PDT 2021
 " )
 
 #    This file is part of Sysclone.
@@ -258,33 +258,33 @@ if [ ${#parts[@]} -gt 0 ] ; then
   fi
   for pp in ${parts[@]} ; do
     frompart=${pp%%:*}
+    if [ "$frompart" != "${frompart/\*}" ] ; then
+      echo " *** ERROR: badly formed argument: '$frompart'"
+      errors+=1
+      continue
+    fi
     clone=( $prefix$frompart-*.clone )
     target=${pp##*:}
-    if [ -b /dev/$clone ] ; then
-      if [ $(lsblk -nd -o TYPE /dev/$clone | grep -E part | wc -l ) -ne 1 ]
+    if [ -b /dev/$target ] ; then
+      if [ $(lsblk -nd -o TYPE /dev/$target | grep -E part | wc -l ) -ne 1 ]
       then
-        echo " *** ERROR: /dev/$clone is not a partition"
+        echo " *** ERROR: /dev/$target is not a partition"
         errors+=1
         continue
       else
-        line=$(lsblk --ascii -n o name,mountpoint /dev/$clone)
-        if [ -n "${line#\* }" ] ; then
+        line=$(lsblk --ascii -n -o name,mountpoint /dev/$target)
+        if [ -n "${line#$target }" ] ; then # removes prefix including one space
           echo " *** ERROR: target is mounted: $line"
           errors+=1
           continue
         fi
       fi
     else
-      echo " *** ERROR: '/dev/$clone' is not a block special file"
+      echo " *** ERROR: '/dev/$target' is not a block special file"
       errors+=1
       continue
     fi
-    if [ "$frompart" != "${frompart/\*}" ] ; then
-      echo " *** ERROR: there is no clone on file for $frompart"
-      errors+=1
-      continue
-    fi
-    if [ ! -w /dev/$clone ] ; then
+    if [ ! -w /dev/$target ] ; then
       echo " *** ERROR: cannot write to $clone"
       errors+=1
       continue
