@@ -2,7 +2,7 @@
 # Restore a drive, or some partitions, from an archive volume
 
 version=$(cat <<<"
-# Last Modified: Tue Mar 23 13:50:07 PDT 2021
+# Last Modified: Sat Mar 27 13:00:47 PDT 2021
 " )
 
 #    This file is part of Sysclone.
@@ -500,7 +500,7 @@ for ft in ${drives[@]} ; do
         if [ "$nosize" = "--force" ] ; then
           fgrep -v "last-lba" $prefix-dump.txt | sfdisk --no-reread "$nosize" -w always -W always /dev/$target
         else
-          sfdisk --no-reread "$nosize" -w always -W always /dev/$target <$prefix-dump.txt
+          sfdisk --no-reread -w always -W always /dev/$target <$prefix-dump.txt
         fi
         
         # ensure proper placement of 2nd GPT
