@@ -2,7 +2,7 @@
 # Clone a drive, or some partitions, to an archive volume
 
 version=$(cat <<<"
-# Last Modified: Mon Mar 22 14:07:59 PDT 2021
+# Last Modified: Fri Apr  9 19:47:42 PDT 2021
 ")
 
 #    This file is part of Sysclone.
@@ -534,7 +534,7 @@ if [ -n "$trace" ] ; then set -x; fi
 dest=$bkup/$host/$date
 bkpref=$dest/$host-$date
 
-if [ -n "$newhost" ] && [ -z "$nofiles" ; then
+if [ -n "$newhost" ] && [ -z "$nofiles" ] ; then
   mkdir -p $bkup/$host
   echo "$date  Fresh start" >$bkup/$host/backup.log
   echo >$bkup/$host/backup.log
