@@ -2,7 +2,7 @@
 # Clone a drive, or some partitions, to an archive volume
 
 version=$(cat <<<"
-# Last Modified: Fri Apr  9 19:47:42 PDT 2021
+# Last Modified: Sat Apr 10 11:27:48 PDT 2021
 ")
 
 #    This file is part of Sysclone.
@@ -83,10 +83,11 @@ then
   echo "$myname requires the GNU getopt program from util-linux" >&2
   exit 1
 fi
-realargs=$(getopt --options 'Cc::Dd:FfhM:mNnp:STvV' \
+realargs=$(getopt --options 'Cc::Dd:FfhM:mNnp:sSTvV' \
   --longoptions 'noclone,collection::'\
   --longoptions 'directory,drives:,dryrun,force,help,mountpoints:,mounted:'\
-  --longoptions 'newhost,nometa,partitions:,nosoloswap,trace,verbose,version'\
+  --longoptions 'newhost,nometa,partitions:,nosoloswap,strict,trace'\
+  --longoptions 'verbose,version'\
   -- "$@")
 if [ $? -ne 0 ]; then
   echo 'Terminating...' >&2
@@ -104,6 +105,7 @@ newhost=""
 mountpoints="error"
 nometa=""
 nosolo=""
+strict=""
 unset date
 unset parts
 unset drives
@@ -207,6 +209,10 @@ do
       echo "  -S |  --nosoloswap  Do not select a drive whose only partitions are"
       echo "                   swap.  Not allowed if drives or partitions are"
       echo "                   named on the command line.  Should be rare."
+      echo "  -s | --strict    Enforce strict adherence to known GPT partition"
+      echo "                   type standards.  BEWARE there may be standards"
+      echo "                   this program does not understand.  Should be"
+      echo "                   rare."
       echo "  -T | --trace     Output a debugging trace of actual BASH commands"
       echo "  -v | --verbose   output additional information about processing"
       echo "                      (very verbose) mostly for debugging"
@@ -280,6 +286,11 @@ do
       parts+=(${2//,/ })   # replace ALL commas with spaces, make it a list
       nometa="true"
       shift 2
+      continue
+      ;;
+    -s | --strict )
+      strict="strict"
+      shift
       continue
       ;;
     -S | --nosoloswap )
@@ -687,177 +698,226 @@ do
     show "Cannot process RAID slice $frompart"
     continue
   fi
-  ###################################################################
-  # FIRST THE GPT PARTITION TYPES
-  ###################################################################
-  unset pt
-  unset action
-  case $ptyp in
-    21686148-6449-6e6f-744e-656564454649 )
-      action="copying BIOS boot partition with dd"
-      ftyp="BIOS Boot"
-      pt="dd"
-      op=
-      ;;
-    c12a7328-f81f-11d2-ba4b-00a0c93ec93b )
-      echo
-      case $ftyp in
-        vfat )
-          action="copying EFI data partition type as $ftyp"
-          pt=$ftyp
-          op="--clone"
-          ;;
-        * )
-          action="copying unknown file system $ftyp in EFI Partition; using dd"
-          pt="dd"
-          op=
-          ;;
-      esac
-      ;;
-    024dee41-33e7-11d3-9d69-0008c781f39f )
-      action="copying unknown MBR partition Schme with dd"
-      pt="dd"
-      op=
-      ;;
-    e3c9e316-0b5c-4db8-817d-f92df00215ae ) # Then the Microsoft-specific types
-      action="copying Microsoft reserved partition Schme with dd"
-      pt="dd"
-      op=
-      ;;
-    de94bba4-06d1-4d40-a16a-bfd50179d6ac )
-      action="copyuing Windows Recovery Environment with dd"
-      pt="dd"
-      op=
-      ;;
-    ebd0a0a2-b9e5-4433-87c0-68b6b72699c7 )
-      case $ftyp in
-        vfat | ntfs )
-          action="copying Basic data partition as $ftyp"
-          pt=$ftyp
-          op="--clone"
-          ;;
-        * )
-          acttion="copying unkown file system $ftyp in Basic Data Partition; using dd"
-          pt="dd"
-          op=
-          ;;
-      esac
-      ;;
-    0fc63daf-8483-4772-8e79-3d69d8477de4 ) # Then the Linux -specific partition types
-      case $ftyp in
-        ext2 | ext3 | ext4 | minix | nilfs2 )
-          action="copying Basic data partition with $ftyp"
-          pt=$ftyp
-          op="--clone"
-          ;;
-        linux_raid_member )
-          echo "#####################################"
-          echo "# ignoring RAID member /dev/$frompart"
-          echo "#####################################"
-          continue # skip entirely
-          ;;
-        * )
-          action="copying unkown file system $ftyp using dd"
-          pt="dd"
-          op=
-          ;;
-      esac
-      ;;
-    0657fd6d-a4ab-43c4-84e5-0933c84b4f4f )
-      case $ftyp in
-        swap )
-          action="creating dummy entry for swap partition on /dev/$frompart; should format on restoration"
-          pt="swap"
-          ;;
-        *)
-          action="copying unexpected filesystem type \"$ftyp\" in GPT linux swap partition /dev/$frompart; using dd"
-          pt=dd
-          op=
-          ;;
-      esac
-      ;;
+  if [ -n "$strict" ] ; then
     ###################################################################
-    # NOW THE MBR partition types
+    # FIRST THE GPT PARTITION TYPES
     ###################################################################
-    0x5 )
-      # Extended partitions have no filesystem;
-      action="creating dummy entry for extended partition on /dev/$frompart"
-      pt="x"
-      ;;
-    0x7 | 0x27) # Linux
-      case $ftyp in
-        ntfs)
-          action="copying /dev/$frompart as ntfs"
-          pt=$ftyp
-          op=--clone
-          ;;
-        ext2 | ext3 | ext4 | minix | nilfs2 )
-          action="copying Basic data partition type with $ftyp"
-          pt=$ftyp
-          op="--clone"
-          ;;
-        *)
-          action="copying unexpected filesystem type \"$ftyp\" in /dev/♮rompart doing dd"
-          pt="dd"
-          op=
-          ;;
-      esac
-      ;;
-    0x1 | 0x4 | 0x6 | 0xb | 0xc | 0xe | 0x11 | 0x14 | 0x16 | 0x1b | 0x1c | 0x1e ) # MSFT
-      # DOCS at https://thestarman.pcministry.com/asm/mbr/PartTypes.htm say
-      # 0x01: FAT-12
-      # 0x04: FAT-16 less than 32MB
-      # 0x06: FAT-16 32MB or more
-      # 0x0B: FAT-32
-      # 0x0C: FAT-32 with int 13 extensions
-      # 0x0e: FAT-16 with INT 13 extensions (>= 32MB)
-      # and add a 0x10 to the above for hidden partitions
-      case $ftyp in
-        fat12 | fat16 | fat32 | vfat | fat )
-          action="copying /dev/$frompart as vfat"
-          pt="vfat"
-          op=--clone
-          ;;
-        *)
-          action="copying unexpected filesystem type \"$ftyp\" in MSFT /dev/♮rompart doing dd"
-          pt="dd"
-          op=
-          ;;
-      esac
-      ;;
-    0x82)
-      case $ftyp in
-        swap)
-          action="creating file $bkpref-$partalias-swap.clone for /dev/$frompart containing UUID"
-          pt="swap"
-          ;;
-        *)
-          action="copying unexpected filesystem /dev/$frompart type \"$ftyp\" in MSFT /dev/$frompart doing dd"
-          pt=dd
-          op=
-          ;;
-      esac
-      ;;
-    0x83)
-      case $ftyp in
-        ext2 | ext3 | ext4 | extfs | nilfs2 | btrfs)
-          action="copying /dev/$frompart using $ftyp"
-          pt=$ftyp
-          op=--clone
-          ;;
-        *)
-          action="copying /dev/$frompart with unexpected type \"$ftyp\" using dd"
-          pt=dd
-          op=
-          ;;
-      esac
-      ;;
-    *)
-      action="copying /dev/$frompart with type \"$ftyp\" in unexpected partition type $ptyp using dd"
-      pt=dd
-      op=
-      ;;
-  esac
+    unset pt
+    unset action
+    case $ptyp in
+      796badd3-6bbf-4d9f-b631-466eb71a4965 )
+        case $ftyp in
+          vfat )
+            action="copying Dell OEM partition as $ftyp"
+            pt=$ftyp
+            op="--clone"
+            ;;
+          * )
+            action="copying unknown file system $ftyp in Dell OEM Partition; using dd"
+            pt="dd"
+            op=
+            ;;
+        esac
+        ;;
+      21686148-6449-6e6f-744e-656564454649 )
+        action="copying BIOS boot partition with dd"
+        ftyp="BIOS Boot"
+        pt="dd"
+        op=
+        ;;
+      c12a7328-f81f-11d2-ba4b-00a0c93ec93b )
+        echo
+        case $ftyp in
+          vfat )
+            action="copying EFI data partition type as $ftyp"
+            pt=$ftyp
+            op="--clone"
+            ;;
+          * )
+            action="copying unknown file system $ftyp in EFI Partition; using dd"
+            pt="dd"
+            op=
+            ;;
+        esac
+        ;;
+      024dee41-33e7-11d3-9d69-0008c781f39f )
+        action="copying unknown MBR partition Schme with dd"
+        pt="dd"
+        op=
+        ;;
+      e3c9e316-0b5c-4db8-817d-f92df00215ae ) # Then the Microsoft-specific types
+        action="copying Microsoft reserved partition Schme with dd"
+        pt="dd"
+        op=
+        ;;
+      de94bba4-06d1-4d40-a16a-bfd50179d6ac )
+        action="copyuing Windows Recovery Environment with dd"
+        pt="dd"
+        op=
+        ;;
+      ebd0a0a2-b9e5-4433-87c0-68b6b72699c7 )
+        case $ftyp in
+          vfat | ntfs )
+            action="copying Basic data partition as $ftyp"
+            pt=$ftyp
+            op="--clone"
+            ;;
+          * )
+            acttion="copying unkown file system $ftyp in Basic Data Partition; using dd"
+            pt="dd"
+            op=
+            ;;
+        esac
+        ;;
+      0fc63daf-8483-4772-8e79-3d69d8477de4 ) # Then the Linux -specific partition types
+        case $ftyp in
+          ext2 | ext3 | ext4 | minix | nilfs2 )
+            action="copying Basic data partition with $ftyp"
+            pt=$ftyp
+            op="--clone"
+            ;;
+          linux_raid_member )
+            echo "#####################################"
+            echo "# ignoring RAID member /dev/$frompart"
+            echo "#####################################"
+            continue # skip entirely
+            ;;
+          * )
+            action="copying unkown file system $ftyp using dd"
+            pt="dd"
+            op=
+            ;;
+        esac
+        ;;
+      0657fd6d-a4ab-43c4-84e5-0933c84b4f4f )
+        case $ftyp in
+          swap )
+            action="creating dummy entry for swap partition on /dev/$frompart; should format on restoration"
+            pt="swap"
+            ;;
+          *)
+            action="copying unexpected filesystem type \"$ftyp\" in GPT linux swap partition /dev/$frompart; using dd"
+            pt=dd
+            op=
+            ;;
+        esac
+        ;;
+      ###################################################################
+      # NOW THE MBR partition types
+      ###################################################################
+      0x5 )
+        # Extended partitions have no filesystem;
+        action="creating dummy entry for extended partition on /dev/$frompart"
+        pt="x"
+        ;;
+      0x7 | 0x27) # Linux
+        case $ftyp in
+          ntfs)
+            action="copying /dev/$frompart as ntfs"
+            pt=$ftyp
+            op=--clone
+            ;;
+          ext2 | ext3 | ext4 | minix | nilfs2 )
+            action="copying Basic data partition type with $ftyp"
+            pt=$ftyp
+            op="--clone"
+            ;;
+          *)
+            action="copying unexpected filesystem type \"$ftyp\" in /dev/♮rompart doing dd"
+            pt="dd"
+            op=
+            ;;
+        esac
+        ;;
+      0x1 | 0x4 | 0x6 | 0xb | 0xc | 0xe | 0x11 | 0x14 | 0x16 | 0x1b | 0x1c | 0x1e ) # MSFT
+        # DOCS at https://thestarman.pcministry.com/asm/mbr/PartTypes.htm say
+        # 0x01: FAT-12
+        # 0x04: FAT-16 less than 32MB
+        # 0x06: FAT-16 32MB or more
+        # 0x0B: FAT-32
+        # 0x0C: FAT-32 with int 13 extensions
+        # 0x0e: FAT-16 with INT 13 extensions (>= 32MB)
+        # and add a 0x10 to the above for hidden partitions
+        case $ftyp in
+          fat12 | fat16 | fat32 | vfat | fat )
+            action="copying /dev/$frompart as vfat"
+            pt="vfat"
+            op=--clone
+            ;;
+          *)
+            action="copying unexpected filesystem type \"$ftyp\" in MSFT /dev/♮rompart doing dd"
+            pt="dd"
+            op=
+            ;;
+        esac
+        ;;
+      0x82)
+        case $ftyp in
+          swap)
+            action="creating file $bkpref-$partalias-swap.clone for /dev/$frompart containing UUID"
+            pt="swap"
+            ;;
+          *)
+            action="copying unexpected filesystem /dev/$frompart type \"$ftyp\" in MSFT /dev/$frompart doing dd"
+            pt=dd
+            op=
+            ;;
+        esac
+        ;;
+      0x83)
+        case $ftyp in
+          ext2 | ext3 | ext4 | extfs | nilfs2 | btrfs)
+            action="copying /dev/$frompart using $ftyp"
+            pt=$ftyp
+            op=--clone
+            ;;
+          *)
+            action="copying /dev/$frompart with unexpected type \"$ftyp\" using dd"
+            pt=dd
+            op=
+            ;;
+        esac
+        ;;
+      *)
+        action="copying /dev/$frompart with type \"$ftyp\" in unexpected partition type $ptyp using dd"
+        pt=dd
+        op=
+        ;;
+    esac
+  else # Non-strict testing of partition types
+    case $ptyp in
+      0x5 )
+        # Extended partitions have no filesystem;
+        action="creating dummy entry for extended partition on /dev/$frompart"
+        pt="x"
+        ;;
+      * )
+        case $ftyp in
+          vfat | fat | fat12 | fat16 | ntfs | ext2 | ext3 | ext4 | extfs | btrfs | minix | nilfs2 )
+            action="copying partition  as $ftyp"
+            action="copying /dev/$frompart as $ftyp"
+            pt=$ftyp
+            op="--clone"
+            ;;
+          linux_raid_member )
+            echo "#####################################"
+            echo "# ignoring RAID member /dev/$frompart"
+            echo "#####################################"
+            continue # skip entirely
+            ;;
+          swap )
+            action="creating dummy entry for swap partition on /dev/$frompart; should format on restoration"
+            pt="swap"
+            ;;
+          *)
+            action="copying unexpected filesystem type \"$ftyp\" in MSFT /dev/♮rompart doing dd"
+            pt="dd"
+            op=
+            ;;
+        esac
+        ;;
+    esac
+  fi
   if [ ! -v pt ] ; then
     logme " *** INTERNAL ERROR: no copy menthod set for /dev/$frompart"
     exit 1
