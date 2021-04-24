@@ -1,7 +1,7 @@
-# README for sysclone
+# README for cyclone
 
 ## Description
-The sysclone project is a BASH shell tool for backing up and replicating all disks in a computer system.  It is mostly a BASH frontend for the partclone family of programs, and was develoed on the Ubuntu flavor of Linux operating systems.  It may be useable on others.
+The cyclone project is a BASH shell tool for backing up and replicating all disks in a computer system.  It is mostly a BASH frontend for the partclone family of programs, and was develoed on the Ubuntu flavor of Linux operating systems.  It may be useable on others.
 
 Its primary use case is to back up all partitions of all disk drives on a computer, while running Linux from an external drive, with backups going to that same or an additional external drive. It expects there to be a directory (by default a mount point) that contains backups organized by computer name and date of backup, so multiple computers can have multiple backups on the same target drive.
 
@@ -49,11 +49,11 @@ RAID arrays are not backed up.
 
 ## License and copying
 
-Sysclone is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 2 of the License, or (at your option) any later version published by the Free Software Foundation.
+Cyclone is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 2 of the License, or (at your option) any later version published by the Free Software Foundation.
 
-Sysclone is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+Cyclone is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 
-You should have received a copy of the GNU General Public License along with Sysclone.  If not, see <https://www.gnu.org/licenses/>.
+You should have received a copy of the GNU General Public License along with Cyclone.  If not, see <https://www.gnu.org/licenses/>.
 
 ## Author
 > Kevin O'Gorman
