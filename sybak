@@ -6,22 +6,22 @@ edate=$(cat <<<"
 " | sed "s/^.*: //")
 version=0.1-alpha2
 
-#    This file is part of Sysclone.
+#    This file is part of Cyclone.
 #    Copyright 2021, Kevin O'Gorman (kogorman@gmail.com)
 #
-#    Sysclone is free software: you can redistribute it and/or modify
+#    Cyclone is free software: you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
 #    the Free Software Foundation, either version 2 of the License, or
 #    (at your option) any later version published by the Free Software
 #    Foundation.
 #
-#    Sysclone is distributed in the hope that it will be useful,
+#    Cyclone is distributed in the hope that it will be useful,
 #    but WITHOUT ANY WARRANTY; without even the implied warranty of
 #    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 #    GNU General Public License for more details.
 #
 #    You should have received a copy of the GNU General Public License
-#    along with Sysclone.  If not, see <https://www.gnu.org/licenses/>.
+#    along with Cyclone.  If not, see <https://www.gnu.org/licenses/>.
 
 # Current design ideas:
 # partclone will be used to copy any filesystem of type FAT*, NTFS, or EXT*.
