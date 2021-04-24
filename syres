@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Restore a drive, or some partitions, from an archive volume
 
-version=$(cat <<<"
-# Last Modified: Sat Mar 27 13:00:47 PDT 2021
-" )
+edate=$(cat <<<"
+# Last Modified: Mon Apr 12 13:55:18 PDT 2021
+" | sed "s/^.*: //")
+version=0.1-alpha2
 
 #    This file is part of Sysclone.
 #    Copyright 2021, Kevin O'Gorman (kogorman@gmail.com)
@@ -144,7 +145,9 @@ while true ; do
       continue
       ;;
     -V | --version)
+      spacer=$(echo $myname | sed 's/./ /g')
       echo "$myname version" $version
+      echo "$spacer last modified:" $edate
       exit 0
       ;;
     -n | --dryrun )   dryrun="true"; shift;   continue ;;
@@ -474,24 +477,7 @@ for ft in ${drives[@]} ; do
       echo Would restore drive label and partition table
     fi
 
-    aimedat=$target
-    # Second, restore the signatures
-    if [ -z "$dryrun" ] ; then
-      echo Restoring individual .bak files
-      for file in $prefix-*.bak
-      do
-        [ -n "$wordy" ] && echo file is $file
-        filepart=${file/$prefix-}
-        [ -n "$wordy" ] && echo filepart is $filepart
-        offset=${filepart/%.bak}
-        [ -n "$wordy" ] && echo offset is $offset
-        dd bs=1 conv=notrunc of=/dev/$target if=$file seek=$(($offset))
-      done
-    else
-      echo "Would restore individual .bak files"
-    fi
-
-    # In the case of GPTs there's an outside chance the label is bigger than
+    # Second, in the case of GPTs there's an outside chance the label is bigger than
     # the firstfew, and we use sfdisk to recreate the whole monster
     if head -1 ${prefix}-dump.txt | grep --quiet --fixed-strings gpt
     then
@@ -515,6 +501,23 @@ EOF
         echo Would restore GPT using sfdisk and gdisk
       fi
     fi
+
+    # Third, restore the signatures (possibly on top of the partition table)
+    if [ -z "$dryrun" ] ; then
+      echo Restoring individual .bak files
+      for file in $prefix-*.bak
+      do
+        [ -n "$wordy" ] && echo file is $file
+        filepart=${file/$prefix-}
+        [ -n "$wordy" ] && echo filepart is $filepart
+        offset=${filepart/%.bak}
+        [ -n "$wordy" ] && echo offset is $offset
+        dd bs=1 conv=notrunc of=/dev/$target if=$file seek=$(($offset))
+      done
+    else
+      echo "Would restore individual .bak files"
+    fi
+
     if [ -z "$dryrun" ] ; then
       if [ -n "$useblockdev" ] ; then
         udevadm settle
