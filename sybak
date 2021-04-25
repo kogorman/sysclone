@@ -2,7 +2,7 @@
 # Clone a drive, or some partitions, to an archive volume
 
 edate=$(cat <<<"
-# Last Modified: Tue Apr 13 05:31:36 PDT 2021
+# Last Modified: Sun Apr 25 10:59:38 PDT 2021
 " | sed "s/^.*: //")
 version=0.1-alpha2
 
@@ -34,7 +34,6 @@ version=0.1-alpha2
 #
 # TODO: support unusual label types; currently just MBR and GPT
 # TODO: support check for consistency of logical and physical sector sizes
-# TODO: consider testing only 0x5 partition type; treat the others in accordance with fstype
 
 bar() {
   echo ===========================================================================
@@ -462,10 +461,16 @@ elif [ ${#drives[@]} -eq 0 ] ; then
 fi
 
 if [ ${#drives[@]} -ne 0 ] ; then
-  for ft in ${drives[@]}
+  for fd in ${drives[@]}
   do
-    fromdrive=${ft%%:*}
-    drivealias=${ft##*:}
+    fromdrive=${fd%%:*}
+    drivealias=${fd##*:}
+    partline=$( sfdisk --dump /dev/$fromdrive | head -1 )
+    if fgrep dos <<<"$partline" >/dev/null; then
+      swaptype="0x82"
+    elif fgrep gpt <<<"$partline" >/dev/null ; then
+      swaptype="0657fd6d-a4ab-43c4-84e5-0933c84b4f4f"
+    fi
     if [ "$mountpoints" = "error" ] ; then
       if [ $(lsblk -n -o MOUNTPOINT /dev/$fromdrive | grep -e . | wc -l) -ne 0 ] ; then
         echo " *** ERROR: /dev/$fromdrive has partitions mounted on mount points:"
@@ -486,10 +491,13 @@ if [ ${#drives[@]} -ne 0 ] ; then
     fi
     for part in $(lsblk --list --nohead -o NAME /dev/$fromdrive | tail -n +2)
     do
+      # assume "skip" because "error" would already have quit
       if [ "$mountpoints" != "allow" ] ; then
-        # assume "skip" because "error" would already have quit
-        if [ $(lsblk -n -o MOUNTPOINT /dev/$part | grep -e . | wc -l) -ne 0 ] ; then
-          continue
+        # Do not exclude swap partitions even if mounted.  Contents are not dumped anyway.
+        if [ $(lsblk -n -o FSTYPE /dev/$part | grep -e $swaptype | wc -l) -eq 0 ] ; then
+          if [ $(lsblk -n -o MOUNTPOINT /dev/$part | grep -e . | wc -l) -ne 0 ] ; then
+            continue
+          fi
         fi
       fi
       partalias=${part/$fromdrive/$drivealias}
@@ -826,7 +834,7 @@ do
             op="--clone"
             ;;
           *)
-            action="copying unexpected filesystem type \"$ftyp\" in /dev/♮rompart doing dd"
+            action="copying unexpected filesystem type \"$ftyp\" in /dev/$frompart doing dd"
             pt="dd"
             op=
             ;;
@@ -846,9 +854,14 @@ do
             action="copying /dev/$frompart as vfat"
             pt="vfat"
             op=--clone
+            ;;♮
+          exfat )
+            action="copying /dev/$frompart as exfat"
+            pt="exfat"
+            op=--clone
             ;;
           *)
-            action="copying unexpected filesystem type \"$ftyp\" in MSFT /dev/♮rompart doing dd"
+            action="copying unexpected filesystem type \"$ftyp\" in MSFT /dev/$frompart doing dd"
             pt="dd"
             op=
             ;;
@@ -896,8 +909,7 @@ do
         ;;
       * )
         case $ftyp in
-          vfat | fat | fat12 | fat16 | ntfs | ext2 | ext3 | ext4 | extfs | btrfs | minix | nilfs2 )
-            action="copying partition  as $ftyp"
+          fat12 | fat16 | exfat | ntfs | ext2 | ext3 | ext4 )
             action="copying /dev/$frompart as $ftyp"
             pt=$ftyp
             op="--clone"
@@ -913,9 +925,15 @@ do
             pt="swap"
             ;;
           *)
-            action="copying unexpected filesystem type \"$ftyp\" in MSFT /dev/♮rompart doing dd"
-            pt="dd"
-            op=
+            if [ -n $which(naprtclone.$ftyp) ] ; then
+              action="Experimental: copying /dev/$frompart as $ftyp"
+              pt=$ftyp
+              op="--clone"
+            else
+              action="copying unexpected filesystem type \"$ftyp\" in MSFT /dev/$frompart doing dd"
+              pt="dd"
+              op=
+            fi
             ;;
         esac
         ;;
