@@ -2,7 +2,7 @@
 # Clone a drive, or some partitions, to an archive volume
 
 edate=$(cat <<<"
-# Last Modified: Sun Apr 25 10:59:38 PDT 2021
+# Last Modified: Sun Apr 25 13:22:03 PDT 2021
 " | sed "s/^.*: //")
 version=0.1-alpha2
 
@@ -854,7 +854,7 @@ do
             action="copying /dev/$frompart as vfat"
             pt="vfat"
             op=--clone
-            ;;♮
+            ;;
           exfat )
             action="copying /dev/$frompart as exfat"
             pt="exfat"
@@ -925,7 +925,7 @@ do
             pt="swap"
             ;;
           *)
-            if [ -n $which(naprtclone.$ftyp) ] ; then
+            if [ -n $(which partclone.$ftyp) ] ; then
               action="Experimental: copying /dev/$frompart as $ftyp"
               pt=$ftyp
               op="--clone"
@@ -953,7 +953,8 @@ do
     action=${action/creating/would create}
   fi
   recap "$frompart $etyp is $ftyp; will treat with $pt and file as $partalias"
-  logme "$action"
+  # Not sure I want this much in the logs; just start and finish times with the command.
+  #logme "$action"
 
   if [ "$pt" = "swap" ] ; then
     if [ -z "$nofiles" ] ; then
