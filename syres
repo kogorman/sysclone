@@ -2,7 +2,7 @@
 # Restore a drive, or some partitions, from an archive volume
 
 edate=$(cat <<<"
-# Last Modified: Mon Apr 12 13:55:18 PDT 2021
+# Last Modified: Tue Apr 27 13:29:25 PDT 2021
 " | sed "s/^.*: //")
 version=0.1-alpha2
 
@@ -22,6 +22,9 @@ version=0.1-alpha2
 #
 #    You should have received a copy of the GNU General Public License
 #    along with Cyclone.  If not, see <https://www.gnu.org/licenses/>.
+
+# TODO: determine if firstfew nd sfdisk are ever needed given the
+#       signatures get restored.
 
 bar() {
   echo ================================================================================
@@ -464,6 +467,8 @@ for ft in ${drives[@]} ; do
     target=${ft##*:}
     prefix=$datestamp/$system-$datestamp-$fromdrive
     echo "drive is $ft and prefix is $prefix"
+    [ -n "$trace" ]  && lsblk --ascii -o +fstype /dev/$target
+    [ -n "$trace" ]  && ls -l /dev/${target}*
     # First restore the initial few sectors that may contain GRUB or GPT or other
     # stuff outside of any partition or label; we'll overlay labels and partition
     # tables later
@@ -476,19 +481,21 @@ for ft in ${drives[@]} ; do
     else
       echo Would restore drive label and partition table
     fi
+    [ -n "$trace" ]  && lsblk --ascii -o +fstype /dev/$target
+    [ -n "$trace" ]  && ls -l /dev/${target}*
 
     # Second, in the case of GPTs there's an outside chance the label is bigger than
-    # the firstfew, and we use sfdisk to recreate the whole monster
+    # the firstfew, and we use sfdisk to recreate the whole monster  Then, make sure
+    # any backup GPT table is in the right place
     if head -1 ${prefix}-dump.txt | grep --quiet --fixed-strings gpt
     then
       if [ -z "$dryrun" ] ; then
-        echo Restoring GPT label with sfdisk, wiping signatures
+        echo Restoring GPT label with sfdisk, wiping signatures, and secondary GPT
         if [ "$nosize" = "--force" ] ; then
           fgrep -v "last-lba" $prefix-dump.txt | sfdisk --no-reread "$nosize" -w always -W always /dev/$target
         else
           sfdisk --no-reread -w always -W always /dev/$target <$prefix-dump.txt
         fi
-        
         # ensure proper placement of 2nd GPT
         echo Rebuilding secondary GPT
         gdisk /dev/$target <<EOF
@@ -498,11 +505,11 @@ w
 y
 EOF
       else
-        echo Would restore GPT using sfdisk and gdisk
+        echo Would restore GPT using sfdisk, and secondary GPT
       fi
     fi
 
-    # Third, restore the signatures (possibly on top of the partition table)
+    # Third, restore the signatures (on top of firstfew, and possibly on top of the partition table)
     if [ -z "$dryrun" ] ; then
       echo Restoring individual .bak files
       for file in $prefix-*.bak
@@ -513,9 +520,29 @@ EOF
         offset=${filepart/%.bak}
         [ -n "$wordy" ] && echo offset is $offset
         dd bs=1 conv=notrunc of=/dev/$target if=$file seek=$(($offset))
+        [ -n "$trace" ]  && lsblk --ascii -o +fstype /dev/$target
+        [ -n "$trace" ]  && ls -l /dev/${target}*
       done
     else
       echo "Would restore individual .bak files"
+    fi
+
+
+    # Fourth, again make sure there's a proper second GPT label (if GPT) 
+    if head -1 ${prefix}-dump.txt | grep --quiet --fixed-strings gpt
+    then
+      if [ -z "$dryrun" ] ; then
+        # ensure proper placement of 2nd GPT
+        echo Rebuilding secondary GPT
+        gdisk /dev/$target <<EOF
+r
+d
+w
+y
+EOF
+      else
+        echo Would rebuild secondary GPT
+      fi
     fi
 
     if [ -z "$dryrun" ] ; then
@@ -542,6 +569,8 @@ EOF
           lsblk /dev/$target
         fi
       fi
+      [ -n "$trace" ]  && lsblk --ascii -o +fstype /dev/$target
+      [ -n "$trace" ]  && ls -l /dev/${target}*
     fi
   } 2>&1 | sed --unbuffered "s/^/   > /"
 done
@@ -554,9 +583,9 @@ rm -f /tmp/$BASHPID-msgs
 if [ -n "$wordy" ] ; then
   echo Whole drives done.
   echo
+  bar
+  echo "Starting partition work; parts is $parts"
 fi
-
-[ -n "$wordy" ] && echo "Starting partition work; parts is $parts"
 
 for ft in ${parts[@]} ; do
   bar
@@ -603,6 +632,8 @@ for ft in ${parts[@]} ; do
               op=" --restore "
             fi
             partclone.$ptyp $op --quiet --source $input --overwrite /dev/$tdrv --logfile tmpclone.log 2>&1
+            [ -n "$trace" ]  && lsblk --ascii -o +fstype /dev/$tdrv
+            [ -n "$trace" ]  && ls -l /dev/$tdrv
           else
             echo "Would restore partition /dev/$tdrv from backup clone"
           fi
