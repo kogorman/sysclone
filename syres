@@ -2,7 +2,7 @@
 # Restore a drive, or some partitions, from an archive volume
 
 edate=$(cat <<<"
-# Last Modified: Tue Apr 27 13:29:25 PDT 2021
+# Last Modified: Wed Apr 28 15:04:22 PDT 2021
 " | sed "s/^.*: //")
 version=0.1-alpha2
 
@@ -493,19 +493,13 @@ for ft in ${drives[@]} ; do
         echo Restoring GPT label with sfdisk, wiping signatures, and secondary GPT
         if [ "$nosize" = "--force" ] ; then
           fgrep -v "last-lba" $prefix-dump.txt | sfdisk --no-reread "$nosize" -w always -W always /dev/$target
+          echo Rebuilding secondary GPT
+          sgdisk --move-second-header /dev/$target
         else
           sfdisk --no-reread -w always -W always /dev/$target <$prefix-dump.txt
         fi
-        # ensure proper placement of 2nd GPT
-        echo Rebuilding secondary GPT
-        gdisk /dev/$target <<EOF
-r
-d
-w
-y
-EOF
       else
-        echo Would restore GPT using sfdisk, and secondary GPT
+        echo Would restore GPT using sfdisk, and ensure correct placement of secondary GPT
       fi
     fi
 
@@ -533,18 +527,14 @@ EOF
     then
       if [ -z "$dryrun" ] ; then
         # ensure proper placement of 2nd GPT
-        echo Rebuilding secondary GPT
-        gdisk /dev/$target <<EOF
-r
-d
-w
-y
-EOF
+        if [ "$nosize" = "--force" ] ; then
+          echo Rebuilding secondary GPT
+          sgdisk --move-second-header /dev/$target
+        fi
       else
-        echo Would rebuild secondary GPT
+        echo Would ensure correct placement of secondary GPT
       fi
     fi
-
     if [ -z "$dryrun" ] ; then
       if [ -n "$useblockdev" ] ; then
         udevadm settle
