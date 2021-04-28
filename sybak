@@ -2,7 +2,7 @@
 # Clone a drive, or some partitions, to an archive volume
 
 edate=$(cat <<<"
-# Last Modified: Sun Apr 25 13:22:03 PDT 2021
+# Last Modified: Wed Apr 28 10:53:30 PDT 2021
 " | sed "s/^.*: //")
 version=0.1-alpha2
 
@@ -461,6 +461,7 @@ elif [ ${#drives[@]} -eq 0 ] ; then
 fi
 
 if [ ${#drives[@]} -ne 0 ] ; then
+  # We have drives on the command line
   for fd in ${drives[@]}
   do
     fromdrive=${fd%%:*}
@@ -903,9 +904,16 @@ do
   else # Non-strict testing of partition types
     case $ptyp in
       0x5 )
-        # Extended partitions have no filesystem;
+        # Extended partitions have no data at all;
         action="creating dummy entry for extended partition on /dev/$frompart"
         pt="x"
+        ;;
+      21686148-6449-6e6f-744e-656564454649 )
+        # GPT BIOS boot parttions have no filesystem
+        action="copying BIOS boot partition with dd"
+        ftyp="BIOS Boot"
+        pt="dd"
+        op=
         ;;
       * )
         case $ftyp in
@@ -925,14 +933,21 @@ do
             pt="swap"
             ;;
           *)
-            if [ -n $(which partclone.$ftyp) ] ; then
-              action="Experimental: copying /dev/$frompart as $ftyp"
-              pt=$ftyp
-              op="--clone"
-            else
-              action="copying unexpected filesystem type \"$ftyp\" in MSFT /dev/$frompart doing dd"
+            if [ -z "$ftyp" ] ; then
+              action="copying /dev/$frompart with dd due to lack of filesystem"
               pt="dd"
-              op=
+              op=""
+            else
+              cloner=$(which partclone.$ftyp)
+              if [ -n "$cloner" ] ; then
+                action="copying /dev/$frompart as $ftyp"
+                pt=$ftyp
+                op="--clone"
+              else
+                action="copying unsupported filesystem \"$ftyp\" in /dev/$frompart doing dd"
+                pt="dd"
+                op=
+              fi
             fi
             ;;
         esac
