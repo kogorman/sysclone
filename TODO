@@ -1,0 +1,7 @@
+TODO as of 0.1-beta1
+
+- Support mdadm RAID partition.
+
+- Test on other partition table types
+
+- Support compression.  Especially zstd and multiple cores.

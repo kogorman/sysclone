@@ -2,9 +2,9 @@
 # Restore a drive, or some partitions, from an archive volume
 
 edate=$(cat <<<"
-# Last Modified: Wed Apr 28 15:04:22 PDT 2021
+# Last Modified: Tue May 18 10:41:23 PDT 2021
 " | sed "s/^.*: //")
-version=0.1-alpha2
+version=0.1-beta1
 
 #    This file is part of Cyclone.
 #    Copyright 2021, Kevin O'Gorman (kogorman@gmail.com)
@@ -30,6 +30,24 @@ bar() {
   echo ================================================================================
 }
 
+# Adjust partition names of drives with names that end in a digit, as Linux
+# does with m.2 drives.  
+# Args:
+#  the name of the result variable
+#  the name of the drive 
+# Result:
+#  result variable gets the base name to be used for partitions of the drive
+#     which is simply the drive name with an appended "p" in the case that
+#     the drive name ends with a digit
+function m2name() {
+  local ld=${2:${#2}-1}
+  if [[ "$ld" < "2" ]] || [[ "$ld" > "9" ]] ; then
+    eval ${1}=$2
+  else
+    eval ${1}=$2"p"
+  fi
+}
+
 set -o errexit
 set -o pipefail
 
@@ -43,9 +61,8 @@ then
   echo "$myname requires the GNU getopt program from util-linux" >&2
   exit 1
 fi
-realargs=$(getopt --options 'd:p:hnSTUVv' \
-  --longoptions 'drives:,partitions:,help,dryrun,nosize,nopart,trace,verbose,version'\
-  -- "$@")
+realargs=$(getopt --options 'd:p:hnSTUVvX' --longoptions 'drives:,partitions:'\
+  --longoptions 'help,dryrun,nosize,nopart,trace,verbose,version' -- "$@")
 if [ $? -ne 0 ]; then
   echo 'Terminating...' >&2
   exit 1
@@ -56,12 +73,12 @@ nopart=""
 wordy=""
 dryrun=""
 datestamp=""
-trace=""
 nosize=""
 unset drives
 unset driveopts
 unset parts
 useblockdev=true
+declare -i trace=0
 
 while true ; do
   case $1 in
@@ -109,7 +126,11 @@ while true ; do
       echo "  -n | --dryrun    Do everything EXCEPT write to destination"
       echo "                     drives or partitions"
       echo "  -S | --nosize    Omit size tests on drive copies (risky!)"
-      echo "  -T | --trace     Output a debugging trace of BASH commands."
+      echo "  -T | --trace     Output a debugging trace of BASH commands;"
+      echo "                   normally begins after option processing"
+      echo "                   but may be specified twice to include that"
+      echo "                   part too.  Probably useful only for debugging"
+      echo "                   this command."
       echo "  -v | --verbose   output additional information about processing"
       echo "                      (very verbose) mostly for debugging"
       echo "  -V | --version   print the last modified timestamp and quit"
@@ -154,9 +175,9 @@ while true ; do
       exit 0
       ;;
     -n | --dryrun )   dryrun="true"; shift;   continue ;;
-    -T | --trace )    trace="true";  shift;   continue ;;
+    -T | --trace )    trace+=1;      shift;   continue ;;
     -U | --nopart )   nopart="true"; shift;   continue ;;
-    -v | --verbose)   wordy="true";  shift;   continue ;;
+    -v | --verbose )  wordy="true";  shift;   continue ;;
     --) shift; break ;;
     *)
       echo "Internal error in $myname!; argument=$1" >&2
@@ -237,7 +258,10 @@ errors=0
 declare -a errormsgs
 errormsgs=()
 
-if [ -n "$trace" ] ; then
+if [ $trace -gt 1 ] ; then
+  bar
+  echo "##### Trace begins early"
+  bar
   set -x
 fi
 
@@ -392,31 +416,22 @@ else
   fi
 
   # form the partitions list for whole drives
-  if [ -n "$wordy" ] ; then
+  if [ -n "$wordy" |]  [ $trace -gt 1 ] ; then
     echo
-    echo "Forming partition list from drive list"
+    echo "\nForming partition list from drive list"
   fi
   for d in ${drives[@]} ; do
     fromdrive=${d%:*}
-    lastfrom=${fromdrive:$((${#fromdrive}-1))}        # kludge to get around BASH bug
-    if [[ "$lastfrom" < "0" ]] || [[ "$lastfrom" > "9" ]] ; then
-      frompad=""
-    else
-      frompad="p"
-    fi
     targetdrive=${d#*:}
-    lasttarget=${targetdrive:$((${#targetdrive}-1))}  # same kludge to get around BASH bug
-    if [[ "$lasttarget" < "0" ]] || [[ "$lasttarget" > "9" ]] ; then
-      targetpad=""
-    else
-      targetpad="p"
-    fi
+    m2name "frombase" $fromdrive
+    m2name "destbase" $targetdrive
     clones=( $prefix$fromdrive*-*.clone )
     for c in ${clones[@]} ; do
-       clonefilename=${c#$prefix}
-       sourcename=${clonefilename%%-*.clone}
-       destname=${sourcename/$fromdrive$frompad/$targetdrive$targetpad}
-       parts+=("$sourcename:$destname")
+      if [ $trace -gt 1 ] ; then echo c is $c; fi
+      clonefilename=${c#$prefix}
+      sourcename=${clonefilename%%-*.clone}
+      destname=${sourcename/$frombase/$destbase}
+      parts+=("$sourcename:$destname")
      done
    done
   if [ -n "$wordy" ] ; then
@@ -455,7 +470,10 @@ else
 fi
 echo
 
-if [ -n "$trace" ] ; then
+if [ $trace -eq 1 ] ; then
+  bar
+  echo "#### Normal trace"
+  bar
   set -x
 fi
 

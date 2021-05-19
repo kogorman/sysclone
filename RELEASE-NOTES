@@ -1,0 +1,19 @@
+Release notes for 0,1-beta1 release
+
+- Summary: now tested on MBR and GPT thumb drives (Ventoy bootable) booting in
+      both Legacy and UEFI mode.
+
+- Added these RELEASE NOTES
+
+- Tweaked formatting and consistency of console output in numerous places
+- Allow stronger --trace; using it twice traces sooner.
+- Added function 'mkname' for the odd naming style of m.2 drives in Linux
+
+- For sybak
+- Now computes the size of the "firstfew" dd copy to be the smaller of 1MB or up to
+      the first partition.  This preserves hidden code outside of any partition.  May
+      miss some of MS Windows tricks if the drive was not shut down properly.
+
+- For syres
+- Dropped -U --nopart option which was nonfuncional anyway.
+

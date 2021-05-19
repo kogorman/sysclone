@@ -2,9 +2,9 @@
 # Clone a drive, or some partitions, to an archive volume
 
 edate=$(cat <<<"
-# Last Modified: Wed Apr 28 10:53:30 PDT 2021
+# Last Modified: Tue May 18 10:36:27 PDT 2021
 " | sed "s/^.*: //")
-version=0.1-alpha2
+version=0.1-beta1
 
 #    This file is part of Cyclone.
 #    Copyright 2021, Kevin O'Gorman (kogorman@gmail.com)
@@ -39,7 +39,24 @@ bar() {
   echo ===========================================================================
 }
 
-# Show a string; Log it unless all file creation is blocked.
+# Adjust partition names of drives with names that end in a digit, as Linux
+# does with m.2 drives.  
+# Args:
+#  the name of the result variable
+#  the name of the drive 
+# Result:
+#  result variable gets the base name to be used for partitions of the drive
+#     which is simply the drive name with an appended "p" in the case that
+#     the drive name ends with a digit
+function m2name() {
+  local ld=${2:${#2}-1}
+  if [[ "$ld" < "2" ]] || [[ "$ld" > "9" ]] ; then
+    eval ${1}=$2
+  else
+    eval ${1}=$2"p"
+  fi
+}
+# Show a string; also log it unless all file creation is blocked.
 show() {
   echo $1
   if [ -z "$nofiles" ] ; then
@@ -490,6 +507,8 @@ if [ ${#drives[@]} -ne 0 ] ; then
       echo " *** ERROR: '/dev/$fromdrive' is not a block special file"
       exit 1
     fi
+    m2name "frombase" $fromdrive
+    m2name "destbase" $drivealias
     for part in $(lsblk --list --nohead -o NAME /dev/$fromdrive | tail -n +2)
     do
       # assume "skip" because "error" would already have quit
@@ -501,8 +520,8 @@ if [ ${#drives[@]} -ne 0 ] ; then
           fi
         fi
       fi
-      partalias=${part/$fromdrive/$drivealias}
-      parts+=("$part:$partalias")
+      partdest=${part/$frombase/$destbase}
+      parts+=("$part:$partdest")
     done
   done
 else
@@ -647,21 +666,31 @@ EOF
     fi
 
     if [ -z "$noclone" ] ; then
-      if  fgrep 'label:' $prefix-dump.txt | fgrep gpt >/dev/null  ; then
-        # minimum size of label stuff for GPT with 512-byte blocks
-        dd bs=512 count=34 if=/dev/$fromdrive of=$prefix-firstfew.dd >/dev/null
-        recap "34 x 512-byte blocks saved in $prefix-firstfew.dd"
-      elif  fgrep 'label:' $prefix-dump.txt | fgrep dos >/dev/null  ; then
-        # some OS-en hide things in the first track of a DOS disk.
-        dd bs=512 count=63 if=/dev/$fromdrive of=$prefix-firstfew.dd >/dev/null
-        recap "63 x 512-byte blocks saved in $prefix-firstfew.dd"
+      if  fgrep 'label:' $prefix-dump.txt | fgrep gpt >/dev/null  || 
+          fgrep 'label:' $prefix-dump.txt | fgrep dos >/dev/null  ; then
+        # some OS-en hide things between the dos or gpt label and the first partition
+        # We'll copy up to 1MB of such stuff
+        limit=1048576
+        declare -a starts
+        # Use starting byte offset of first partition
+        starts=$(parted -sm /dev/$fromdrive unit B print |
+          tail -n +3 |
+          cut -d':' -f 2 |
+          sed 's/B//' )
+        for start in ${starts[@]} ; do
+          if [ "$start" -lt "$limit" ] ; then
+            limit=$start
+          fi
+        done
+        dd bs=$limit count=1 if=/dev/$fromdrive of=$prefix-firstfew.dd conv=notrunc >/dev/null
       else
+        limit="1M"
         dd bs=1M count=1 if=/dev/$fromdrive of=$prefix-firstfew.dd >/dev/null
-        recap "drive label is of unknown type; saving 1MB in $prefix-firstfew.dd"
+        recap "drive label is of unknown type; saving first 1MB in $prefix-firstfew.dd"
       fi
-      recap "Label information copied to $prefix-firstfew.dd"
+      recap "First $limit bytes copied to $prefix-firstfew.dd"
     else
-      recap "Skipping copy of first few blocks"
+      recap "Would copy first few bytes"
     fi
 
     # Save separate copies of scripts per drive.  Overkill??
@@ -1027,7 +1056,10 @@ if [ -n "$nofiles" ] ; then
   show "No files were created."
 else
   show "see $bkpref-clone.log for details"
+  show ""
+  show "#########################################################################"
   show "Recap follows"
+  show "#########################################################################"
   for i in "${recap[@]}" ; do
     show "    $i"
   done
