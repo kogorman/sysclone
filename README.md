@@ -19,6 +19,8 @@ Drives and partitions can be renamed during either the clone or the restore step
 
 The `-h` option prints a man page for the command.  The two commands are sybak and syres.
 
+## Requirements
+
 The clone operation has several expectations (some of which can be overridden by command-line options) that are designed to catch typographic and other errors in the commands.
 
 - The target must contain a text file named `backup.log`
@@ -28,7 +30,6 @@ The clone operation has several expectations (some of which can be overridden by
 - No Target drive for a restore currently has a partition table at all.
 
 
-## Requirements
 ## Examples
 ### Copy all
 
