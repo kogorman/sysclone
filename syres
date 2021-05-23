@@ -2,7 +2,7 @@
 # Restore a drive, or some partitions, from an archive volume
 
 edate=$(cat <<<"
-# Last Modified: Tue May 18 10:41:23 PDT 2021
+# Last Modified: Sun May 23 11:21:08 PDT 2021
 " | sed "s/^.*: //")
 version=0.1-beta1
 
@@ -389,7 +389,7 @@ else
     fi
     # For whole-drive copies, require the targets to be empty: no partition table at all.
     if [ $(lsblk /dev/$drivealias | wc -l) -gt 2 ] ; then
-      echo " *** ERROR: Target drive /dev/$t must be empty -- see "'wipefs(8)' >&2
+      echo " *** ERROR: Target drive /dev/$drivealias must be empty -- see "'wipefs(8)' >&2
       errors+=1
       continue
     fi
@@ -416,7 +416,7 @@ else
   fi
 
   # form the partitions list for whole drives
-  if [ -n "$wordy" |]  [ $trace -gt 1 ] ; then
+  if [ -n "$wordy" ] || [ $trace -gt 1 ] ; then
     echo
     echo "\nForming partition list from drive list"
   fi
