@@ -61,8 +61,9 @@ then
   echo "$myname requires the GNU getopt program from util-linux" >&2
   exit 1
 fi
-realargs=$(getopt --options 'd:p:hnSTUVvX' --longoptions 'drives:,partitions:'\
-  --longoptions 'help,dryrun,nosize,nopart,trace,verbose,version' -- "$@")
+realargs=$(getopt --options 'D:d:p:hnSTUVvX' --longoptions 'drives:,partitions:'\
+  --longoptions 'help,datestamp:,dryrun,nosize,nopart,trace,verbose,version'\
+  -- "$@")
 if [ $? -ne 0 ]; then
   echo 'Terminating...' >&2
   exit 1
